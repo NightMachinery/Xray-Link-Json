@@ -9,84 +9,108 @@
 package main
 
 import (
-        "encoding/base64"
-        "fmt"
-        "log"
-        "os"
-        "strings"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"strings"
 
-        "github.com/xtls/libxray"
+	"github.com/xtls/libxray"
 )
 
 func main() {
-        // Check if command-line argument is provided
-        if len(os.Args) < 2 {
-                log.Fatal("Please provide a Share link or Xray JSON")
-        }
+	if len(os.Args) < 2 {
+		log.Fatal("Please provide a Share link, Xray JSON, file path, or '-' for stdin")
+	}
 
-        input := os.Args[1] // Get the input from the second command-line argument
-        fmt.Println("Input:", input)
+	rawArg := os.Args[1]
+	input, source, err := resolveInput(rawArg)
+	if err != nil {
+		log.Fatalf("Failed to read input: %v", err)
+	}
 
-        // Determine if the input is a Share link or Xray JSON based on the first character
-        if strings.HasPrefix(input, "{") {
-                // Convert Xray JSON to Share links
-                convertXrayJsonToShareLinks(input)
-        } else {
-                // Convert Share link to Xray JSON
-                convertShareLinkToXrayJson(input)
-        }
+	fmt.Println("Input:", rawArg)
+	if source != "arg" {
+		fmt.Println("Input source:", source)
+	}
+
+	if isLikelyJSON(input) {
+		convertXrayJsonToShareLinks(input)
+	} else {
+		convertShareLinkToXrayJson(input)
+	}
+}
+
+func resolveInput(arg string) (string, string, error) {
+	if arg == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", "stdin", err
+		}
+		input := strings.TrimSpace(string(data))
+		if input == "" {
+			return "", "stdin", fmt.Errorf("stdin is empty")
+		}
+		return input, "stdin", nil
+	}
+
+	if info, err := os.Stat(arg); err == nil && !info.IsDir() {
+		data, err := os.ReadFile(arg)
+		if err != nil {
+			return "", arg, err
+		}
+		input := strings.TrimSpace(string(data))
+		if input == "" {
+			return "", arg, fmt.Errorf("file is empty: %s", arg)
+		}
+		return input, arg, nil
+	}
+
+	return strings.TrimSpace(arg), "arg", nil
+}
+
+func isLikelyJSON(input string) bool {
+	input = strings.TrimSpace(input)
+	return strings.HasPrefix(input, "{") || strings.HasPrefix(input, "[")
 }
 
 // Convert Share link to Xray JSON
 func convertShareLinkToXrayJson(shareLink string) {
-        // Print the input link
-        fmt.Println("Processing Share link...")
+	fmt.Println("Processing Share link...")
 
-        // Convert the Share link to Base64 (if it's not already Base64)
-        shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
+	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
+	result := libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
 
-        // Call the ConvertShareLinksToXrayJson function from the libXray package
-        result := libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
+	if result == "" {
+		log.Fatal("Error converting Share link to Xray JSON")
+	} else {
+		decodedBytes, err := base64.StdEncoding.DecodeString(result)
+		if err != nil {
+			log.Fatalf("Error decoding: %v", err)
+		}
 
-        // Check and display the result
-        if result == "" {
-                log.Fatal("Error converting Share link to Xray JSON")
-        } else {
-                // Decode from Base64
-                decodedBytes, err := base64.StdEncoding.DecodeString(result)
-                if err != nil {
-                        log.Fatalf("Error decoding: %v", err)
-                }
-
-                // Print the decoded data
-                fmt.Println("Decoded Xray JSON:")
-                fmt.Println(string(decodedBytes))
-        }
+		fmt.Println("Decoded Xray JSON:")
+		fmt.Println(string(decodedBytes))
+	}
 }
 
 // Convert Xray JSON to Share links
 func convertXrayJsonToShareLinks(xrayJson string) {
-        // Print the input Xray JSON
-        fmt.Println("Processing Xray JSON...")
+	fmt.Println("Processing Xray JSON...")
 
-        // Base64 encode the Xray JSON string
-        encodedJson := base64.StdEncoding.EncodeToString([]byte(xrayJson))
+	encodedJson := base64.StdEncoding.EncodeToString([]byte(xrayJson))
+	result := libXray.ConvertXrayJsonToShareLinks(encodedJson)
 
-        // Call the ConvertXrayJsonToShareLinks function from the libXray package
-        result := libXray.ConvertXrayJsonToShareLinks(encodedJson)
+	if result == "" {
+		log.Fatal("Error converting Xray JSON to Share links")
+	} else {
+		decodedBytes, err := base64.StdEncoding.DecodeString(result)
+		if err != nil {
+			log.Fatalf("Error decoding: %v", err)
+		}
 
-        // Check and display the result
-        if result == "" {
-                log.Fatal("Error converting Xray JSON to Share links")
-        } else {
-                // Decode from Base64
-                decodedBytes, err := base64.StdEncoding.DecodeString(result)
-                if err != nil {
-                        log.Fatalf("Error decoding: %v", err)
-                }
-
-                // Print the decoded data
-                fmt.Println("Decoded Share links:")
-                fmt.Println(string(decodedBytes))
-        }
+		fmt.Println("Decoded Share links:")
+		fmt.Println(string(decodedBytes))
+	}
 }

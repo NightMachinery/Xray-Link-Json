@@ -19,9 +19,15 @@ Requirements:
 Xray-Link-Json '<input>'
 ```
 
+Supported input forms:
+- inline JSON
+- inline share link
+- path to a file containing JSON or share link
+- `-` to read from stdin
+
 Behavior:
-- If input starts with `{`, it is treated as Xray JSON and converted to share links.
-- Otherwise, it is treated as a share link and converted to Xray JSON.
+- If resolved input starts with `{` or `[`, it is treated as Xray JSON and converted to share links.
+- Otherwise, it is treated as share-link input and converted to Xray JSON.
 
 ### Examples
 
@@ -37,16 +43,21 @@ Convert JSON -> link:
 Xray-Link-Json '{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"example.com","port":443,"users":[{"id":"123456789","encryption":"none"}]}]}}]}'
 ```
 
-From a file:
+From a file path:
 
 ```bash
-Xray-Link-Json "$(jq -c . ./client.json)"
+Xray-Link-Json ./client.json
+```
+
+From stdin:
+
+```bash
+jq -c . ./client.json | Xray-Link-Json -
 ```
 
 ## Notes
 
 - Output is printed as decoded JSON text.
-- The tool currently logs the raw input line before conversion.
 
 ## License
 

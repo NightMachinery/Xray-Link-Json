@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -27,7 +28,7 @@ type conversionEnvelope struct {
 }
 
 const (
-	ansiGray  = "\x1b[90m"
+	ansiGray  = "\x1b[38;5;245m"
 	ansiReset = "\x1b[0m"
 )
 
@@ -147,7 +148,7 @@ func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64 output: %w", err)
 	}
-	stderrln(string(decodedBytes))
+	stderrln(prettyJSONOrRaw(decodedBytes))
 
 	var envelope conversionEnvelope
 	if err := json.Unmarshal(decodedBytes, &envelope); err != nil {
@@ -166,6 +167,14 @@ func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {
 	}
 
 	return &envelope, nil
+}
+
+func prettyJSONOrRaw(raw []byte) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err == nil {
+		return buf.String()
+	}
+	return string(raw)
 }
 
 func convertShareLinkToXrayJSON(shareLink string) error {

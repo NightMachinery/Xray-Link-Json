@@ -10,6 +10,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -19,7 +20,15 @@ import (
 	"github.com/xtls/libxray"
 )
 
+type conversionEnvelope struct {
+	Success bool            `json:"success"`
+	Data    json.RawMessage `json:"data"`
+	Error   string          `json:"error"`
+}
+
 func main() {
+	log.SetFlags(0)
+
 	if len(os.Args) < 2 {
 		log.Fatal("Please provide a Share link, Xray JSON, file path, or '-' for stdin")
 	}
@@ -30,15 +39,20 @@ func main() {
 		log.Fatalf("Failed to read input: %v", err)
 	}
 
-	fmt.Println("Input:", rawArg)
+	fmt.Fprintln(os.Stderr, "Input:", rawArg)
 	if source != "arg" {
-		fmt.Println("Input source:", source)
+		fmt.Fprintln(os.Stderr, "Input source:", source)
 	}
 
 	if isLikelyJSON(input) {
-		convertXrayJsonToShareLinks(input)
-	} else {
-		convertShareLinkToXrayJson(input)
+		if err := convertXrayJSONToShareLinks(input); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	if err := convertShareLinkToXrayJSON(input); err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -75,42 +89,84 @@ func isLikelyJSON(input string) bool {
 	return strings.HasPrefix(input, "{") || strings.HasPrefix(input, "[")
 }
 
-// Convert Share link to Xray JSON
-func convertShareLinkToXrayJson(shareLink string) {
-	fmt.Println("Processing Share link...")
-
-	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
-	result := libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
-
-	if result == "" {
-		log.Fatal("Error converting Share link to Xray JSON")
-	} else {
-		decodedBytes, err := base64.StdEncoding.DecodeString(result)
-		if err != nil {
-			log.Fatalf("Error decoding: %v", err)
-		}
-
-		fmt.Println("Decoded Xray JSON:")
-		fmt.Println(string(decodedBytes))
+func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {
+	if encoded == "" {
+		return nil, fmt.Errorf("empty conversion result")
 	}
+
+	decodedBytes, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode base64 output: %w", err)
+	}
+
+	var envelope conversionEnvelope
+	if err := json.Unmarshal(decodedBytes, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse conversion payload: %w", err)
+	}
+
+	if !envelope.Success {
+		if envelope.Error != "" {
+			return nil, fmt.Errorf("conversion failed: %s", envelope.Error)
+		}
+		return nil, fmt.Errorf("conversion failed")
+	}
+
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return nil, fmt.Errorf("conversion returned empty data")
+	}
+
+	return &envelope, nil
 }
 
-// Convert Xray JSON to Share links
-func convertXrayJsonToShareLinks(xrayJson string) {
-	fmt.Println("Processing Xray JSON...")
+func convertShareLinkToXrayJSON(shareLink string) error {
+	fmt.Fprintln(os.Stderr, "Processing Share link...")
 
-	encodedJson := base64.StdEncoding.EncodeToString([]byte(xrayJson))
-	result := libXray.ConvertXrayJsonToShareLinks(encodedJson)
-
-	if result == "" {
-		log.Fatal("Error converting Xray JSON to Share links")
-	} else {
-		decodedBytes, err := base64.StdEncoding.DecodeString(result)
-		if err != nil {
-			log.Fatalf("Error decoding: %v", err)
-		}
-
-		fmt.Println("Decoded Share links:")
-		fmt.Println(string(decodedBytes))
+	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
+	encodedResult := libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
+	envelope, err := decodeLibXrayResponse(encodedResult)
+	if err != nil {
+		return err
 	}
+
+	return writeDataToStdout(envelope.Data)
+}
+
+func convertXrayJSONToShareLinks(xrayJSON string) error {
+	fmt.Fprintln(os.Stderr, "Processing Xray JSON...")
+
+	encodedJSON := base64.StdEncoding.EncodeToString([]byte(xrayJSON))
+	encodedResult := libXray.ConvertXrayJsonToShareLinks(encodedJSON)
+	envelope, err := decodeLibXrayResponse(encodedResult)
+	if err != nil {
+		return err
+	}
+
+	var links string
+	if err := json.Unmarshal(envelope.Data, &links); err == nil {
+		fmt.Fprintln(os.Stdout, strings.TrimSpace(links))
+		return nil
+	}
+
+	return writeDataToStdout(envelope.Data)
+}
+
+func writeDataToStdout(data json.RawMessage) error {
+	if len(data) == 0 {
+		return fmt.Errorf("no data to print")
+	}
+
+	var asString string
+	if err := json.Unmarshal(data, &asString); err == nil {
+		fmt.Fprintln(os.Stdout, strings.TrimSpace(asString))
+		return nil
+	}
+
+	if _, err := os.Stdout.Write(data); err != nil {
+		return fmt.Errorf("failed writing output: %w", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		fmt.Fprintln(os.Stdout)
+	}
+
+	return nil
 }

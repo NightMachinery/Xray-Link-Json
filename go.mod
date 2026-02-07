@@ -1,4 +1,4 @@
-module xrayLinkJson
+module github.com/NightMachinery/Xray-Link-Json
 
 go 1.23.5
 

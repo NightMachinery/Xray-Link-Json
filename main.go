@@ -26,7 +26,56 @@ type conversionEnvelope struct {
 	Error   string          `json:"error"`
 }
 
+const (
+	ansiGray  = "\x1b[90m"
+	ansiReset = "\x1b[0m"
+)
+
+var stderrOut io.Writer = os.Stderr
+
+type grayTTYWriter struct {
+	target      io.Writer
+	shouldColor bool
+}
+
+func newGrayTTYWriter(f *os.File) *grayTTYWriter {
+	info, err := f.Stat()
+	isTTY := err == nil && (info.Mode()&os.ModeCharDevice) != 0
+	return &grayTTYWriter{target: f, shouldColor: isTTY}
+}
+
+func (w *grayTTYWriter) Write(p []byte) (int, error) {
+	if !w.shouldColor || len(p) == 0 {
+		return w.target.Write(p)
+	}
+
+	colored := make([]byte, 0, len(ansiGray)+len(p)+len(ansiReset))
+	colored = append(colored, ansiGray...)
+	colored = append(colored, p...)
+	colored = append(colored, ansiReset...)
+
+	written, err := w.target.Write(colored)
+	if err != nil {
+		if written <= len(ansiGray) {
+			return 0, err
+		}
+		visible := written - len(ansiGray)
+		if visible > len(p) {
+			visible = len(p)
+		}
+		return visible, err
+	}
+
+	return len(p), nil
+}
+
+func stderrln(a ...any) {
+	fmt.Fprintln(stderrOut, a...)
+}
+
 func main() {
+	stderrOut = newGrayTTYWriter(os.Stderr)
+	log.SetOutput(stderrOut)
 	log.SetFlags(0)
 
 	if len(os.Args) < 2 {
@@ -39,9 +88,9 @@ func main() {
 		log.Fatalf("Failed to read input: %v", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Input:", rawArg)
+	stderrln("Input:", rawArg)
 	if source != "arg" {
-		fmt.Fprintln(os.Stderr, "Input source:", source)
+		stderrln("Input source:", source)
 	}
 
 	if isLikelyJSON(input) {
@@ -98,6 +147,7 @@ func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64 output: %w", err)
 	}
+	stderrln(string(decodedBytes))
 
 	var envelope conversionEnvelope
 	if err := json.Unmarshal(decodedBytes, &envelope); err != nil {
@@ -119,7 +169,7 @@ func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {
 }
 
 func convertShareLinkToXrayJSON(shareLink string) error {
-	fmt.Fprintln(os.Stderr, "Processing Share link...")
+	stderrln("Processing Share link...")
 
 	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
 	encodedResult := libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
@@ -132,7 +182,7 @@ func convertShareLinkToXrayJSON(shareLink string) error {
 }
 
 func convertXrayJSONToShareLinks(xrayJSON string) error {
-	fmt.Fprintln(os.Stderr, "Processing Xray JSON...")
+	stderrln("Processing Xray JSON...")
 
 	encodedJSON := base64.StdEncoding.EncodeToString([]byte(xrayJSON))
 	encodedResult := libXray.ConvertXrayJsonToShareLinks(encodedJSON)

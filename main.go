@@ -94,8 +94,10 @@ func main() {
 		stderrln("Input source:", source)
 	}
 
-	if isLikelyJSON(input) {
-		if err := convertXrayJSONToShareLinks(input); err != nil {
+	if normalizedJSON, ok, err := normalizeJSONInput(input); err != nil {
+		log.Fatal(err)
+	} else if ok {
+		if err := convertXrayJSONToShareLinks(normalizedJSON); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -134,9 +136,101 @@ func resolveInput(arg string) (string, string, error) {
 	return strings.TrimSpace(arg), "arg", nil
 }
 
-func isLikelyJSON(input string) bool {
-	input = strings.TrimSpace(input)
-	return strings.HasPrefix(input, "{") || strings.HasPrefix(input, "[")
+func normalizeJSONInput(input string) (string, bool, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", false, nil
+	}
+
+	stripped, err := stripJSONComments(trimmed)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to parse JSON comments: %w", err)
+	}
+
+	candidate := strings.TrimSpace(stripped)
+	if !strings.HasPrefix(candidate, "{") && !strings.HasPrefix(candidate, "[") {
+		return "", false, nil
+	}
+
+	var raw json.RawMessage
+	if err := json.Unmarshal([]byte(candidate), &raw); err != nil {
+		return "", false, fmt.Errorf("invalid JSON input: %w", err)
+	}
+
+	return candidate, true, nil
+}
+
+func stripJSONComments(input string) (string, error) {
+	var out strings.Builder
+	out.Grow(len(input))
+
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+
+		if inString {
+			out.WriteByte(ch)
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			out.WriteByte(ch)
+			continue
+		}
+
+		if ch == '/' && i+1 < len(input) {
+			next := input[i+1]
+			if next == '/' {
+				i += 2
+				for ; i < len(input) && input[i] != '\n'; i++ {
+				}
+				if i < len(input) {
+					out.WriteByte(input[i])
+				}
+				continue
+			}
+			if next == '*' {
+				i += 2
+				closed := false
+				for ; i < len(input); i++ {
+					if input[i] == '\n' {
+						out.WriteByte('\n')
+					}
+					if input[i] == '*' && i+1 < len(input) && input[i+1] == '/' {
+						i++
+						closed = true
+						break
+					}
+				}
+				if !closed {
+					return "", fmt.Errorf("unterminated block comment")
+				}
+				continue
+			}
+		}
+
+		out.WriteByte(ch)
+	}
+
+	if inString {
+		return "", fmt.Errorf("unterminated string")
+	}
+
+	return out.String(), nil
 }
 
 func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {

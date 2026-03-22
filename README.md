@@ -26,7 +26,8 @@ Supported input forms:
 - `-` to read from stdin
 
 Behavior:
-- If resolved input starts with `{` or `[`, it is treated as Xray JSON and converted to share links.
+- JSON input may include `// ...` and `/* ... */` comments.
+- If resolved input is JSON (after trimming whitespace/comments), it is treated as Xray JSON and converted to share links.
 - Otherwise, it is treated as share-link input and converted to Xray JSON.
 
 ### Examples

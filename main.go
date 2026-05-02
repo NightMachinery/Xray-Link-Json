@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -25,6 +26,11 @@ type conversionEnvelope struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data"`
 	Error   string          `json:"error"`
+}
+
+type cliOptions struct {
+	OutboundOnly bool
+	Input        string
 }
 
 const (
@@ -79,11 +85,12 @@ func main() {
 	log.SetOutput(stderrOut)
 	log.SetFlags(0)
 
-	if len(os.Args) < 2 {
-		log.Fatal("Please provide a Share link, Xray JSON, file path, or '-' for stdin")
+	opts, err := parseArgs(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	rawArg := os.Args[1]
+	rawArg := opts.Input
 	input, source, err := resolveInput(rawArg)
 	if err != nil {
 		log.Fatalf("Failed to read input: %v", err)
@@ -97,15 +104,38 @@ func main() {
 	if normalizedJSON, ok, err := normalizeJSONInput(input); err != nil {
 		log.Fatal(err)
 	} else if ok {
+		if opts.OutboundOnly {
+			if err := writeOutboundsOnlyToStdout(json.RawMessage(normalizedJSON)); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
 		if err := convertXrayJSONToShareLinks(normalizedJSON); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
-	if err := convertShareLinkToXrayJSON(input); err != nil {
+	if err := convertShareLinkToXrayJSON(input, opts.OutboundOnly); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func parseArgs(args []string) (cliOptions, error) {
+	var opts cliOptions
+	flags := flag.NewFlagSet("Xray-Link-Json", flag.ContinueOnError)
+	flags.SetOutput(stderrOut)
+	flags.BoolVar(&opts.OutboundOnly, "outbound-only", false, "print only the JSON outbound objects, suitable for pasting inside an outbounds array")
+
+	if err := flags.Parse(args); err != nil {
+		return opts, err
+	}
+	if flags.NArg() != 1 {
+		return opts, fmt.Errorf("please provide exactly one Share link, Xray JSON, file path, or '-' for stdin")
+	}
+
+	opts.Input = flags.Arg(0)
+	return opts, nil
 }
 
 func resolveInput(arg string) (string, string, error) {
@@ -271,16 +301,24 @@ func prettyJSONOrRaw(raw []byte) string {
 	return string(raw)
 }
 
-func convertShareLinkToXrayJSON(shareLink string) error {
+func convertShareLinkToXrayJSON(shareLink string, outboundOnly bool) error {
 	stderrln("Processing Share link...")
 
 	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
-	encodedResult := libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
+	encodedResult, err := callLibXrayWithStdoutRedirect(func() string {
+		return libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
+	})
+	if err != nil {
+		return err
+	}
 	envelope, err := decodeLibXrayResponse(encodedResult)
 	if err != nil {
 		return err
 	}
 
+	if outboundOnly {
+		return writeOutboundsOnlyToStdout(envelope.Data)
+	}
 	return writeDataToStdout(envelope.Data)
 }
 
@@ -288,7 +326,12 @@ func convertXrayJSONToShareLinks(xrayJSON string) error {
 	stderrln("Processing Xray JSON...")
 
 	encodedJSON := base64.StdEncoding.EncodeToString([]byte(xrayJSON))
-	encodedResult := libXray.ConvertXrayJsonToShareLinks(encodedJSON)
+	encodedResult, err := callLibXrayWithStdoutRedirect(func() string {
+		return libXray.ConvertXrayJsonToShareLinks(encodedJSON)
+	})
+	if err != nil {
+		return err
+	}
 	envelope, err := decodeLibXrayResponse(encodedResult)
 	if err != nil {
 		return err
@@ -301,6 +344,75 @@ func convertXrayJSONToShareLinks(xrayJSON string) error {
 	}
 
 	return writeDataToStdout(envelope.Data)
+}
+
+func callLibXrayWithStdoutRedirect(convert func() string) (string, error) {
+	var encodedResult string
+	capturedStdout, err := captureStdout(func() {
+		encodedResult = convert()
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if capturedStdout != "" {
+		if _, writeErr := fmt.Fprint(stderrOut, capturedStdout); writeErr != nil {
+			return "", fmt.Errorf("failed writing captured diagnostics to stderr: %w", writeErr)
+		}
+		if !strings.HasSuffix(capturedStdout, "\n") {
+			stderrln()
+		}
+	}
+
+	return encodedResult, nil
+}
+
+func writeOutboundsOnlyToStdout(data json.RawMessage) error {
+	outbounds, err := formatOutboundsOnly(data)
+	if err != nil {
+		return err
+	}
+	if len(outbounds) == 0 {
+		return nil
+	}
+	if _, err := os.Stdout.Write(outbounds); err != nil {
+		return fmt.Errorf("failed writing outbounds: %w", err)
+	}
+	return nil
+}
+
+func formatOutboundsOnly(data json.RawMessage) ([]byte, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON output: %w", err)
+	}
+
+	rawOutbounds, ok := root["outbounds"]
+	if !ok {
+		return nil, fmt.Errorf("JSON output does not contain an outbounds field")
+	}
+
+	var outbounds []json.RawMessage
+	if err := json.Unmarshal(rawOutbounds, &outbounds); err != nil {
+		return nil, fmt.Errorf("outbounds is not a JSON array: %w", err)
+	}
+
+	var buf bytes.Buffer
+	for i, outbound := range outbounds {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, outbound, "", "  "); err != nil {
+			return nil, fmt.Errorf("failed to format outbound %d: %w", i, err)
+		}
+		if i > 0 {
+			buf.WriteString(",\n")
+		}
+		buf.Write(pretty.Bytes())
+	}
+	if len(outbounds) > 0 {
+		buf.WriteByte('\n')
+	}
+
+	return buf.Bytes(), nil
 }
 
 func writeDataToStdout(data json.RawMessage) error {

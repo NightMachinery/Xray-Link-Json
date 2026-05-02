@@ -56,9 +56,18 @@ From stdin:
 jq -c . ./client.json | Xray-Link-Json -
 ```
 
+Print only outbound objects from share links, suitable for pasting inside an existing `"outbounds": [` array:
+
+```bash
+cat tmp/test_1 | Xray-Link-Json --outbound-only -
+```
+
+`--outbound-only` prints comma-separated outbound objects without the surrounding array brackets. Diagnostics and Xray warnings are written to stderr so stdout contains only the requested data.
+
 ## Notes
 
 - Output is printed as decoded JSON text.
+- Additional usage details are in [`docs/usage.md`](docs/usage.md).
 
 ## License
 

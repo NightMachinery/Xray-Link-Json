@@ -58,7 +58,7 @@ jq -c . ./client.json | Xray-Link-Json -
 
 Diagnostics and Xray warnings are written to stderr so stdout contains only the converted data.
 
-When converting share links to JSON, empty outbound `tag` fields are filled with random two-word tags from the system dictionary.
+When converting share links to JSON, empty outbound `tag` fields are filled with random hyphenated two-word tags from the system dictionary.
 
 ## Notes
 

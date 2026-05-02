@@ -14,5 +14,5 @@ cat tmp/test_1 | Xray-Link-Json - > converted.json 2> conversion.log
 
 ## Empty outbound tags
 
-When share links are converted to Xray JSON, any outbound with an empty `"tag": ""` value gets a random two-word tag such as `"river lantern"`. Words are selected from `/usr/share/dict/` when available, with a small built-in fallback word list if dictionaries cannot be read.
+When share links are converted to Xray JSON, any outbound with an empty `"tag": ""` value gets a random hyphenated two-word tag such as `"blue-bat"`. Words are selected from `/usr/share/dict/` when available, with a small built-in fallback word list if dictionaries cannot be read.
 

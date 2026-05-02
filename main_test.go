@@ -58,7 +58,7 @@ func TestFillEmptyOutboundTags(t *testing.T) {
 	}`)
 
 	output, count, err := fillEmptyOutboundTags(input, func() (string, error) {
-		return "alpha bravo", nil
+		return "alpha-bravo", nil
 	})
 	if err != nil {
 		t.Fatalf("fillEmptyOutboundTags returned error: %v", err)
@@ -76,7 +76,7 @@ func TestFillEmptyOutboundTags(t *testing.T) {
 		t.Fatalf("failed to unmarshal output: %v", err)
 	}
 
-	if parsed.Outbounds[0].Tag != "alpha bravo" {
+	if parsed.Outbounds[0].Tag != "alpha-bravo" {
 		t.Fatalf("expected first tag to be filled, got %q", parsed.Outbounds[0].Tag)
 	}
 	if parsed.Outbounds[1].Tag != "keep-me" {

@@ -427,7 +427,7 @@ func randomTwoWordTag() (string, error) {
 		return "", err
 	}
 
-	return first + " " + second, nil
+	return first + "-" + second, nil
 }
 
 func tagWords() ([]string, error) {

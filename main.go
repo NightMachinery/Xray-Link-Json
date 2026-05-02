@@ -9,14 +9,19 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/xtls/libxray"
 )
@@ -32,11 +37,13 @@ type cliOptions struct {
 }
 
 const (
-	ansiGray  = "\x1b[38;5;245m"
-	ansiReset = "\x1b[0m"
+	ansiGray       = "\x1b[38;5;245m"
+	ansiReset      = "\x1b[0m"
+	systemDictPath = "/usr/share/dict"
 )
 
 var stderrOut io.Writer = os.Stderr
+var cachedTagWords []string
 
 type grayTTYWriter struct {
 	target      io.Writer
@@ -301,7 +308,15 @@ func convertShareLinkToXrayJSON(shareLink string) error {
 		return err
 	}
 
-	return writeDataToStdout(envelope.Data)
+	data, filledTags, err := fillEmptyOutboundTags(envelope.Data, randomTwoWordTag)
+	if err != nil {
+		return err
+	}
+	if filledTags > 0 {
+		stderrln("Filled empty outbound tags:", filledTags)
+	}
+
+	return writeDataToStdout(data)
 }
 
 func convertXrayJSONToShareLinks(xrayJSON string) error {
@@ -347,6 +362,164 @@ func callLibXrayWithStdoutRedirect(convert func() string) (string, error) {
 	}
 
 	return encodedResult, nil
+}
+
+func fillEmptyOutboundTags(data json.RawMessage, tagGenerator func() (string, error)) (json.RawMessage, int, error) {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, 0, fmt.Errorf("failed to parse JSON output for tag generation: %w", err)
+	}
+
+	rawOutbounds, ok := root["outbounds"]
+	if !ok || rawOutbounds == nil {
+		return data, 0, nil
+	}
+
+	outbounds, ok := rawOutbounds.([]any)
+	if !ok {
+		return nil, 0, fmt.Errorf("outbounds is not a JSON array")
+	}
+
+	filled := 0
+	for i, rawOutbound := range outbounds {
+		outbound, ok := rawOutbound.(map[string]any)
+		if !ok {
+			return nil, 0, fmt.Errorf("outbound %d is not a JSON object", i)
+		}
+
+		tag, ok := outbound["tag"].(string)
+		if !ok || tag != "" {
+			continue
+		}
+
+		generatedTag, err := tagGenerator()
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to generate tag for outbound %d: %w", i, err)
+		}
+		outbound["tag"] = generatedTag
+		filled++
+	}
+
+	if filled == 0 {
+		return data, 0, nil
+	}
+
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to encode JSON output after tag generation: %w", err)
+	}
+
+	return encoded, filled, nil
+}
+
+func randomTwoWordTag() (string, error) {
+	words, _ := tagWords()
+	if len(words) == 0 {
+		words = fallbackTagWords()
+	}
+
+	first, err := randomWord(words)
+	if err != nil {
+		return "", err
+	}
+	second, err := randomWord(words)
+	if err != nil {
+		return "", err
+	}
+
+	return first + " " + second, nil
+}
+
+func tagWords() ([]string, error) {
+	if cachedTagWords != nil {
+		return cachedTagWords, nil
+	}
+
+	words, err := loadDictionaryWords(systemDictPath)
+	if err != nil {
+		stderrln("Warning: failed to read dictionary words:", err)
+		words = fallbackTagWords()
+	}
+	cachedTagWords = words
+	return cachedTagWords, err
+}
+
+func loadDictionaryWords(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if err := readDictionaryFile(filepath.Join(dir, entry.Name()), seen); err != nil {
+			return nil, err
+		}
+	}
+
+	words := make([]string, 0, len(seen))
+	for word := range seen {
+		words = append(words, word)
+	}
+	return words, nil
+}
+
+func readDictionaryFile(path string, seen map[string]struct{}) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		if word, ok := normalizeTagWord(scanner.Text()); ok {
+			seen[word] = struct{}{}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+func normalizeTagWord(raw string) (string, bool) {
+	word := strings.ToLower(strings.TrimSpace(raw))
+	if len(word) < 3 || len(word) > 12 {
+		return "", false
+	}
+
+	for _, r := range word {
+		if !unicode.IsLetter(r) {
+			return "", false
+		}
+	}
+
+	return word, true
+}
+
+func randomWord(words []string) (string, error) {
+	if len(words) == 0 {
+		return "", fmt.Errorf("word list is empty")
+	}
+
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(words))))
+	if err != nil {
+		return "", err
+	}
+	return words[n.Int64()], nil
+}
+
+func fallbackTagWords() []string {
+	return []string{
+		"amber", "anchor", "breeze", "brook", "cedar", "cloud",
+		"copper", "ember", "falcon", "field", "harbor", "lantern",
+		"meadow", "orbit", "pebble", "river", "silver", "summit",
+	}
 }
 
 func writeDataToStdout(data json.RawMessage) error {

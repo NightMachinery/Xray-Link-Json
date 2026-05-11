@@ -17,6 +17,20 @@ Windows builds use `.zip`; Linux, macOS, and Android builds use `.tar.gz`.
 The Android arm64 artifact is intended for Termux-style usage on modern Android
 devices. Each release also includes `checksums.txt` with SHA-256 hashes.
 
+### Linux ARM vs Android ARM
+
+`linux_arm64` and `android_arm64` both target 64-bit ARM CPUs, but they are not
+the same operating-system target:
+
+- `linux_arm64` is for standard GNU/Linux or musl Linux distributions on ARM64,
+  such as Debian, Ubuntu, Alpine, or Raspberry Pi OS.
+- `android_arm64` is for Android userlands, especially Termux on ARM64 phones,
+  tablets, and devices.
+
+Android uses its own OS ABI, libc, filesystem conventions, and syscall surface.
+Use the Android artifact on Termux even if the device reports an ARM64 CPU. Use
+the Linux artifact only for a normal Linux distribution.
+
 ## Diagnostics
 
 The conversion result is written to stdout. Converter diagnostics and Xray warnings are written to stderr so stdout stays usable in pipelines.

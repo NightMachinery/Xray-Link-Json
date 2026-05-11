@@ -21,6 +21,12 @@ and Android arm64. Archives are named like
 `Xray-Link-Json_v1.2.3_windows_amd64.zip`, and each release includes a
 `checksums.txt` file with SHA-256 hashes.
 
+Use the `linux_arm64` build on normal 64-bit ARM Linux distributions, such as
+Debian, Ubuntu, Alpine, or Raspberry Pi OS. Use the `android_arm64` build on
+Android environments such as Termux. Even when the CPU architecture is the same,
+Android is a different OS target with a different runtime/libc and syscall
+surface, so Linux ARM binaries should not be treated as Android binaries.
+
 ## Usage
 
 ```bash

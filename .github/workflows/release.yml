@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME}"
+          binary="Xray-Link-Json"
+          targets=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+            "windows/arm64"
+            "android/arm64"
+          )
+
+          rm -rf build dist
+          mkdir -p build dist
+
+          for target in "${targets[@]}"; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            ext=""
+            archive_ext="tar.gz"
+            if [[ "${goos}" == "windows" ]]; then
+              ext=".exe"
+              archive_ext="zip"
+            fi
+
+            name="${binary}_${version}_${goos}_${goarch}"
+            pkgdir="build/${name}"
+            mkdir -p "${pkgdir}"
+
+            env CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              go build -trimpath -ldflags="-s -w" -o "${pkgdir}/${binary}${ext}" .
+
+            cp README.md LICENSE "${pkgdir}/"
+
+            if [[ "${archive_ext}" == "zip" ]]; then
+              python3 - "${pkgdir}" "dist/${name}.zip" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          source = pathlib.Path(sys.argv[1])
+          destination = pathlib.Path(sys.argv[2])
+
+          with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+              for path in source.rglob("*"):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(source.parent))
+          PY
+            else
+              tar -C build -czf "dist/${name}.tar.gz" "${name}"
+            fi
+          done
+
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name checksums.txt -exec sha256sum {} + \
+              | sed 's# \./# #' \
+              | sort -k2 \
+              > checksums.txt
+          )
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" dist/* --clobber
+          else
+            gh release create "${tag}" dist/* --title "${tag}" --generate-notes
+          fi

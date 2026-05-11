@@ -13,6 +13,14 @@ go install github.com/NightMachinery/Xray-Link-Json@latest
 Requirements:
 - Go 1.23.5+ (Go may auto-download a compatible toolchain)
 
+## Release binaries
+
+Versioned GitHub Releases provide prebuilt archives for Linux, macOS, Windows,
+and Android arm64. Archives are named like
+`Xray-Link-Json_v1.2.3_linux_amd64.tar.gz` or
+`Xray-Link-Json_v1.2.3_windows_amd64.zip`, and each release includes a
+`checksums.txt` file with SHA-256 hashes.
+
 ## Usage
 
 ```bash

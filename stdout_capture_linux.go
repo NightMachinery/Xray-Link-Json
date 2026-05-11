@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build linux || android
 
 package main
 
@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func captureStdout(fn func()) (string, error) {
@@ -16,11 +17,11 @@ func captureStdout(fn func()) (string, error) {
 	}
 
 	stdoutFD := int(os.Stdout.Fd())
-	savedStdoutFD, err := syscall.Dup(stdoutFD)
+	savedStdoutFD, err := unix.Dup(stdoutFD)
 	if err != nil {
 		return "", fmt.Errorf("failed to duplicate stdout: %w", err)
 	}
-	defer syscall.Close(savedStdoutFD)
+	defer unix.Close(savedStdoutFD)
 
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -34,7 +35,7 @@ func captureStdout(fn func()) (string, error) {
 		readDone <- readResult{data: captured, err: readErr}
 	}()
 
-	if err := syscall.Dup2(int(writer.Fd()), stdoutFD); err != nil {
+	if err := unix.Dup3(int(writer.Fd()), stdoutFD, 0); err != nil {
 		writer.Close()
 		result := <-readDone
 		if result.err != nil {
@@ -45,7 +46,7 @@ func captureStdout(fn func()) (string, error) {
 
 	fn()
 
-	restoreErr := syscall.Dup2(savedStdoutFD, stdoutFD)
+	restoreErr := unix.Dup3(savedStdoutFD, stdoutFD, 0)
 	closeErr := writer.Close()
 
 	result := <-readDone

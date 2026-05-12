@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -22,6 +23,50 @@ func TestParseArgsRequiresOneInput(t *testing.T) {
 	}
 	if _, err := parseArgs([]string{"first", "second"}); err == nil {
 		t.Fatal("expected error for multiple inputs")
+	}
+}
+
+func TestIsVersionCommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"Xray-Link-Json", "--version"},
+		{"Xray-Link-Json", "version"},
+	} {
+		if !isVersionCommand(args) {
+			t.Fatalf("expected %v to be a version command", args)
+		}
+	}
+
+	for _, args := range [][]string{
+		{"Xray-Link-Json"},
+		{"Xray-Link-Json", "-"},
+		{"Xray-Link-Json", "--version", "extra"},
+	} {
+		if isVersionCommand(args) {
+			t.Fatalf("expected %v not to be a version command", args)
+		}
+	}
+}
+
+func TestFormatVersionInfoIncludesBundledXrayVersion(t *testing.T) {
+	got := formatVersionInfo("v1.2.3", "abc123", "2026-05-12T00:00:00Z", "25.1.30")
+	want := "Xray-Link-Json v1.2.3\ncommit=abc123\ndate=2026-05-12T00:00:00Z\nxray=25.1.30\n"
+	if got != want {
+		t.Fatalf("unexpected version info:\nwant %q\ngot  %q", want, got)
+	}
+}
+
+func TestDecodeXrayVersion(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(`{"success":true,"data":"25.1.30"}`))
+	if got := decodeXrayVersion(encoded); got != "25.1.30" {
+		t.Fatalf("expected decoded Xray version, got %q", got)
+	}
+
+	if got := decodeXrayVersion("26.3.27"); got != "26.3.27" {
+		t.Fatalf("expected raw Xray version, got %q", got)
+	}
+
+	if got := decodeXrayVersion("not-base64"); got != "unknown" {
+		t.Fatalf("expected unknown for invalid version payload, got %q", got)
 	}
 }
 
@@ -222,6 +267,23 @@ func TestConvertBareProxyShareLinkToXrayJSONSkipsHTTPURLs(t *testing.T) {
 func TestConvertBareProxyShareLinkToXrayJSONRejectsInvalidPort(t *testing.T) {
 	if _, ok, err := convertBareProxyShareLinkToXrayJSON("socks5://127.0.0.1:70000"); !ok || err == nil {
 		t.Fatalf("expected invalid socks5 port error, ok=%v err=%v", ok, err)
+	}
+}
+
+func TestNormalizeShareTextForLibXrayTrimsTrailingVMessQRCodeJunk(t *testing.T) {
+	payload := "eyJhZGQiOiI4NS4xOTQuMjQzLjExNyIsImFpZCI6IjAiLCJhbHBuIjoiIiwiZnAiOiIiLCJob3N0IjoiODUuMTk0LjI0My4xMTciLCJpZCI6IjE0MjNmYTU0LTEyNTYtNGNiYi05NjYzLWUwY2NhYjQ2ZjAyYSIsImluc2VjdXJlIjoiMCIsIm5ldCI6IndzIiwicGF0aCI6Ii92bWVzcy1hcmdvIiwicG9ydCI6IjU3ODc4IiwicHMiOiJJUi1AVjJyYXlBbHBoYS0yNyIsInNjeSI6ImF1dG8iLCJzbmkiOiIiLCJ0bHMiOiIiLCJ0eXBlIjoiLS0tIiwidiI6IjIifQ=="
+	input := "vmess://" + payload + "vmess"
+	want := "vmess://" + payload
+	if got := normalizeShareTextForLibXray(input); got != want {
+		t.Fatalf("expected trailing VMess QR junk to be trimmed\nwant %q\ngot  %q", want, got)
+	}
+}
+
+func TestNormalizeShareTextForLibXrayKeepsOnlyURILinesWhenPresent(t *testing.T) {
+	input := "# header\n\nnot a link\nhttps://example.com/page\nvmess://abc\nvless://id@example.com:443\nhttp://proxyuser:password@example.com:2060\n"
+	want := "vless://id@example.com:443\nhttp://proxyuser:password@example.com:2060"
+	if got := normalizeShareTextForLibXray(input); got != want {
+		t.Fatalf("expected subscription comments and prose to be filtered\nwant %q\ngot  %q", want, got)
 	}
 }
 

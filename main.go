@@ -47,6 +47,12 @@ const (
 var stderrOut io.Writer = os.Stderr
 var cachedTagWords []string
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 type grayTTYWriter struct {
 	target      io.Writer
 	shouldColor bool
@@ -92,6 +98,11 @@ func main() {
 	log.SetOutput(stderrOut)
 	log.SetFlags(0)
 
+	if isVersionCommand(os.Args) {
+		fmt.Print(versionInfo())
+		return
+	}
+
 	opts, err := parseArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
@@ -120,6 +131,68 @@ func main() {
 	if err := convertShareLinkToXrayJSON(input); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func isVersionCommand(args []string) bool {
+	return len(args) == 2 && (args[1] == "--version" || args[1] == "version")
+}
+
+func versionInfo() string {
+	return formatVersionInfo(version, commit, date, xrayVersion())
+}
+
+func formatVersionInfo(appVersion, appCommit, buildDate, bundledXrayVersion string) string {
+	return fmt.Sprintf(
+		"Xray-Link-Json %s\ncommit=%s\ndate=%s\nxray=%s\n",
+		appVersion,
+		appCommit,
+		buildDate,
+		bundledXrayVersion,
+	)
+}
+
+func xrayVersion() string {
+	return decodeXrayVersion(libXray.XrayVersion())
+}
+
+func decodeXrayVersion(encoded string) string {
+	raw := strings.TrimSpace(encoded)
+	if raw == "" {
+		return "unknown"
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		if isLikelyVersionString(raw) {
+			return raw
+		}
+		return "unknown"
+	}
+
+	value := strings.TrimSpace(string(decoded))
+	if value == "" {
+		return "unknown"
+	}
+
+	var envelope conversionEnvelope
+	if err := json.Unmarshal([]byte(value), &envelope); err == nil && envelope.Success {
+		var xray string
+		if err := json.Unmarshal(envelope.Data, &xray); err == nil {
+			xray = strings.TrimSpace(xray)
+			if xray != "" {
+				return xray
+			}
+		}
+	}
+
+	return value
+}
+
+func isLikelyVersionString(value string) bool {
+	if value == "" || strings.ContainsAny(value, "\r\n\t ") {
+		return false
+	}
+	return strings.Contains(value, ".")
 }
 
 func parseArgs(args []string) (cliOptions, error) {
@@ -257,44 +330,6 @@ func stripJSONComments(input string) (string, error) {
 	return out.String(), nil
 }
 
-func decodeLibXrayResponse(encoded string) (*conversionEnvelope, error) {
-	if encoded == "" {
-		return nil, fmt.Errorf("empty conversion result")
-	}
-
-	decodedBytes, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode base64 output: %w", err)
-	}
-	stderrln(prettyJSONOrRaw(decodedBytes))
-
-	var envelope conversionEnvelope
-	if err := json.Unmarshal(decodedBytes, &envelope); err != nil {
-		return nil, fmt.Errorf("failed to parse conversion payload: %w", err)
-	}
-
-	if !envelope.Success {
-		if envelope.Error != "" {
-			return nil, fmt.Errorf("conversion failed: %s", envelope.Error)
-		}
-		return nil, fmt.Errorf("conversion failed")
-	}
-
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return nil, fmt.Errorf("conversion returned empty data")
-	}
-
-	return &envelope, nil
-}
-
-func prettyJSONOrRaw(raw []byte) string {
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, raw, "", "  "); err == nil {
-		return buf.String()
-	}
-	return string(raw)
-}
-
 func convertShareLinkToXrayJSON(shareLink string) error {
 	stderrln("Processing Share link...")
 
@@ -305,19 +340,14 @@ func convertShareLinkToXrayJSON(shareLink string) error {
 		return writeDataToStdout(proxyJSON)
 	}
 
-	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
-	encodedResult, err := callLibXrayWithStdoutRedirect(func() string {
-		return libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
+	normalizedShareLink := normalizeShareTextForLibXray(shareLink)
+	data, err := convertWithLibXrayTempFiles("share.txt", "xray.json", normalizedShareLink, func(inputPath, outputPath string) string {
+		return libXray.ParseShareText(inputPath, outputPath)
 	})
 	if err != nil {
 		return err
 	}
-	envelope, err := decodeLibXrayResponse(encodedResult)
-	if err != nil {
-		return err
-	}
-
-	data, filledTags, err := fillEmptyOutboundTags(envelope.Data, randomTwoWordTag)
+	data, filledTags, err := fillEmptyOutboundTags(data, randomTwoWordTag)
 	if err != nil {
 		return err
 	}
@@ -390,6 +420,140 @@ func convertBareProxyShareLinkToXrayJSON(shareLink string) (json.RawMessage, boo
 	return data, true, nil
 }
 
+func normalizeShareTextForLibXray(text string) string {
+	lines := strings.Split(text, "\n")
+	shareLinks := make([]string, 0, len(lines))
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lines[i] = trimmed
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if normalized, ok := normalizeSubscriptionURILine(trimmed); ok {
+			shareLinks = append(shareLinks, normalized)
+		}
+	}
+	if len(shareLinks) > 0 {
+		return strings.Join(shareLinks, "\n")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeSubscriptionURILine(line string) (string, bool) {
+	if !strings.Contains(line, "://") {
+		return "", false
+	}
+
+	parsed, err := url.Parse(line)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", false
+	}
+
+	if strings.EqualFold(parsed.Scheme, "vmess") {
+		normalized := normalizeVMessQRCodeLink(line)
+		if isVMessQRCodeLink(normalized) || hasURLPort(normalized) {
+			return normalized, true
+		}
+		return "", false
+	}
+
+	if strings.EqualFold(parsed.Scheme, "http") {
+		if (parsed.Path == "" || parsed.Path == "/") && parsed.RawQuery == "" && parsed.Port() != "" {
+			return line, true
+		}
+		return "", false
+	}
+	if strings.EqualFold(parsed.Scheme, "https") {
+		return "", false
+	}
+	if requiresURLPort(parsed.Scheme) && parsed.Port() == "" {
+		return "", false
+	}
+	return line, true
+}
+
+func hasURLPort(line string) bool {
+	parsed, err := url.Parse(line)
+	return err == nil && parsed.Port() != ""
+}
+
+func requiresURLPort(scheme string) bool {
+	switch strings.ToLower(scheme) {
+	case "vless", "trojan", "socks", "ss":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeVMessQRCodeLink(link string) string {
+	const prefix = "vmess://"
+	if !strings.HasPrefix(strings.ToLower(link), prefix) {
+		return link
+	}
+
+	payload := link[len(prefix):]
+	if isVMessQRCodePayload(payload) {
+		return link
+	}
+
+	if normalized, ok := trimVMessQRCodePayload(payload); ok {
+		return prefix + normalized
+	}
+	return link
+}
+
+func isVMessQRCodeLink(link string) bool {
+	const prefix = "vmess://"
+	return strings.HasPrefix(strings.ToLower(link), prefix) && isVMessQRCodePayload(link[len(prefix):])
+}
+
+func trimVMessQRCodePayload(payload string) (string, bool) {
+	if padding := strings.IndexByte(payload, '='); padding >= 0 {
+		end := padding + 1
+		if end < len(payload) && payload[end] == '=' {
+			end++
+		}
+		candidate := payload[:end]
+		if isVMessQRCodePayload(candidate) {
+			return candidate, true
+		}
+	}
+
+	for end := len(payload) - 1; end > 0; end-- {
+		candidate := payload[:end]
+		if isVMessQRCodePayload(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func isVMessQRCodePayload(payload string) bool {
+	decoded, err := decodeShareBase64(payload)
+	if err != nil {
+		return false
+	}
+
+	var qr map[string]json.RawMessage
+	if err := json.Unmarshal(decoded, &qr); err != nil {
+		return false
+	}
+
+	_, hasAddress := qr["add"]
+	_, hasID := qr["id"]
+	_, hasPort := qr["port"]
+	return hasAddress && hasID && hasPort
+}
+
+func decodeShareBase64(text string) ([]byte, error) {
+	normalized := strings.NewReplacer("-", "+", "_", "/").Replace(text)
+	if missingPadding := len(normalized) % 4; missingPadding != 0 {
+		normalized += strings.Repeat("=", 4-missingPadding)
+	}
+	return base64.StdEncoding.DecodeString(normalized)
+}
+
 func bareProxyProtocol(parsed *url.URL) (string, bool) {
 	switch strings.ToLower(parsed.Scheme) {
 	case "socks5":
@@ -410,25 +574,15 @@ func bareProxyProtocol(parsed *url.URL) (string, bool) {
 func convertXrayJSONToShareLinks(xrayJSON string) error {
 	stderrln("Processing Xray JSON...")
 
-	encodedJSON := base64.StdEncoding.EncodeToString([]byte(xrayJSON))
-	encodedResult, err := callLibXrayWithStdoutRedirect(func() string {
-		return libXray.ConvertXrayJsonToShareLinks(encodedJSON)
+	data, err := convertWithLibXrayTempFiles("xray.json", "share.txt", xrayJSON, func(inputPath, outputPath string) string {
+		return libXray.ConvertXrayJsonToShareText(inputPath, outputPath)
 	})
 	if err != nil {
 		return err
 	}
-	envelope, err := decodeLibXrayResponse(encodedResult)
-	if err != nil {
-		return err
-	}
 
-	var links string
-	if err := json.Unmarshal(envelope.Data, &links); err == nil {
-		fmt.Fprintln(os.Stdout, strings.TrimSpace(links))
-		return nil
-	}
-
-	return writeDataToStdout(envelope.Data)
+	fmt.Fprintln(os.Stdout, strings.TrimSpace(string(data)))
+	return nil
 }
 
 func callLibXrayWithStdoutRedirect(convert func() string) (string, error) {
@@ -450,6 +604,41 @@ func callLibXrayWithStdoutRedirect(convert func() string) (string, error) {
 	}
 
 	return encodedResult, nil
+}
+
+func convertWithLibXrayTempFiles(inputName, outputName, input string, convert func(inputPath, outputPath string) string) (json.RawMessage, error) {
+	tempDir, err := os.MkdirTemp("", "xray-link-json-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary conversion directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	inputPath := filepath.Join(tempDir, inputName)
+	outputPath := filepath.Join(tempDir, outputName)
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		return nil, fmt.Errorf("failed to write temporary conversion input: %w", err)
+	}
+
+	result, err := callLibXrayWithStdoutRedirect(func() string {
+		return convert(inputPath, outputPath)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(result) != "" {
+		return nil, fmt.Errorf("conversion failed: %s", strings.TrimSpace(result))
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read temporary conversion output: %w", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, fmt.Errorf("conversion returned empty data")
+	}
+
+	return data, nil
 }
 
 func fillEmptyOutboundTags(data json.RawMessage, tagGenerator func() (string, error)) (json.RawMessage, int, error) {

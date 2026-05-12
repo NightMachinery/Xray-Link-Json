@@ -2,6 +2,16 @@
 
 `Xray-Link-Json` accepts one input argument: inline JSON, an inline share link, a file path, or `-` for stdin.
 
+Print build metadata with either form:
+
+```bash
+Xray-Link-Json --version
+Xray-Link-Json version
+```
+
+The output includes the application version, commit, build date, and bundled
+Xray version.
+
 Bare proxy URLs are accepted directly:
 
 ```bash
@@ -16,6 +26,15 @@ handled as proxy settings. Other HTTP URLs are left for the upstream converter.
 ## Release artifacts
 
 GitHub Releases are built from version tags such as `v1.2.3`.
+
+Release builds can stamp version metadata with linker flags:
+
+```bash
+go build -ldflags "\
+-X main.version=${TAG} \
+-X main.commit=${COMMIT} \
+-X main.date=${DATE}"
+```
 
 Prebuilt archives use this naming pattern:
 

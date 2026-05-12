@@ -12,7 +12,7 @@ go install github.com/NightMachinery/Xray-Link-Json@latest
 ```
 
 Requirements:
-- Go 1.23.5+ (Go may auto-download a compatible toolchain)
+- Go 1.26.3+ (Go may auto-download a compatible toolchain)
 
 ## Release binaries
 
@@ -32,6 +32,7 @@ surface, so Linux ARM binaries should not be treated as Android binaries.
 
 ```bash
 Xray-Link-Json '<input>'
+Xray-Link-Json --version
 ```
 
 Supported input forms:
@@ -81,6 +82,9 @@ jq -c . ./client.json | Xray-Link-Json -
 Diagnostics and Xray warnings are written to stderr so stdout contains only the converted data.
 
 When converting share links to JSON, empty outbound `tag` fields are filled with random hyphenated two-word tags from the system dictionary.
+
+`Xray-Link-Json --version` and `Xray-Link-Json version` print the build version,
+commit, build date, and bundled Xray version.
 
 ## Notes
 

@@ -3,6 +3,7 @@
 CLI wrapper around `github.com/xtls/libxray` that converts between:
 - Xray JSON config
 - share links (`vless://`, `vmess://`, etc.)
+- bare proxy URLs (`socks5://host:port`, `http://user:pass@host:port`)
 
 ## Install
 
@@ -50,6 +51,13 @@ Convert link -> JSON:
 
 ```bash
 Xray-Link-Json 'vless://123456789@example.com:443?security=tls&sni=sni.example.com&type=ws&host=host.example.com&path=%2F#sample-vless'
+```
+
+Convert a bare SOCKS or HTTP proxy URL -> JSON:
+
+```bash
+Xray-Link-Json 'socks5://127.0.0.1:10050'
+Xray-Link-Json 'http://proxyuser:password@example.com:2060'
 ```
 
 Convert JSON -> link:

@@ -2,6 +2,17 @@
 
 `Xray-Link-Json` accepts one input argument: inline JSON, an inline share link, a file path, or `-` for stdin.
 
+Bare proxy URLs are accepted directly:
+
+```bash
+Xray-Link-Json 'socks5://127.0.0.1:10050'
+Xray-Link-Json 'socks5://user:pass@example.com:1080#proxy-tag'
+Xray-Link-Json 'http://proxyuser:password@example.com:2060'
+```
+
+For `http://` inputs, only bare proxy URLs with no path or query string are
+handled as proxy settings. Other HTTP URLs are left for the upstream converter.
+
 ## Release artifacts
 
 GitHub Releases are built from version tags such as `v1.2.3`.

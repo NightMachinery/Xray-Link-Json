@@ -18,8 +18,10 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -296,6 +298,13 @@ func prettyJSONOrRaw(raw []byte) string {
 func convertShareLinkToXrayJSON(shareLink string) error {
 	stderrln("Processing Share link...")
 
+	if proxyJSON, ok, err := convertBareProxyShareLinkToXrayJSON(shareLink); ok || err != nil {
+		if err != nil {
+			return err
+		}
+		return writeDataToStdout(proxyJSON)
+	}
+
 	shareLinkBase64 := base64.StdEncoding.EncodeToString([]byte(shareLink))
 	encodedResult, err := callLibXrayWithStdoutRedirect(func() string {
 		return libXray.ConvertShareLinksToXrayJson(shareLinkBase64)
@@ -317,6 +326,85 @@ func convertShareLinkToXrayJSON(shareLink string) error {
 	}
 
 	return writeDataToStdout(data)
+}
+
+func convertBareProxyShareLinkToXrayJSON(shareLink string) (json.RawMessage, bool, error) {
+	parsed, err := url.Parse(strings.TrimSpace(shareLink))
+	if err != nil {
+		return nil, false, nil
+	}
+	protocol, ok := bareProxyProtocol(parsed)
+	if !ok {
+		return nil, false, nil
+	}
+	if parsed.Hostname() == "" {
+		return nil, true, fmt.Errorf("%s proxy link is missing a host", parsed.Scheme)
+	}
+	if parsed.Port() == "" {
+		return nil, true, fmt.Errorf("%s proxy link is missing a port", parsed.Scheme)
+	}
+
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, true, fmt.Errorf("invalid %s proxy port: %q", parsed.Scheme, parsed.Port())
+	}
+
+	server := map[string]any{
+		"address": parsed.Hostname(),
+		"port":    port,
+	}
+	if parsed.User != nil {
+		username := parsed.User.Username()
+		password, hasPassword := parsed.User.Password()
+		if username != "" || hasPassword {
+			server["users"] = []map[string]string{
+				{
+					"user": username,
+					"pass": password,
+				},
+			}
+		}
+	}
+
+	tag := strings.TrimSpace(parsed.Fragment)
+	if tag == "" {
+		tag = protocol
+	}
+
+	root := map[string]any{
+		"outbounds": []map[string]any{
+			{
+				"protocol": protocol,
+				"tag":      tag,
+				"settings": map[string]any{
+					"servers": []map[string]any{server},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(root)
+	if err != nil {
+		return nil, true, fmt.Errorf("failed to encode %s outbound: %w", protocol, err)
+	}
+	return data, true, nil
+}
+
+func bareProxyProtocol(parsed *url.URL) (string, bool) {
+	switch strings.ToLower(parsed.Scheme) {
+	case "socks5":
+		return "socks", true
+	case "http":
+		if parsed.Path != "" && parsed.Path != "/" {
+			return "", false
+		}
+		if parsed.RawQuery != "" {
+			return "", false
+		}
+		return "http", true
+	default:
+		return "", false
+	}
 }
 
 func convertXrayJSONToShareLinks(xrayJSON string) error {

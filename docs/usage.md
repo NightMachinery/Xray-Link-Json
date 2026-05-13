@@ -74,3 +74,10 @@ cat tmp/test_1 | Xray-Link-Json - > converted.json 2> conversion.log
 ## Empty outbound tags
 
 When share links are converted to Xray JSON, any outbound with an empty `"tag": ""` value gets a random hyphenated two-word tag such as `"blue-bat"`. Words are selected from `/usr/share/dict/` when available, with a small built-in fallback word list if dictionaries cannot be read.
+
+## VLESS encryption
+
+When VLESS share links are converted to Xray JSON, users include an
+`"encryption"` field. If the share link or upstream conversion output omits the
+value, `Xray-Link-Json` defaults it to `"none"` so the generated config is
+accepted by current Xray releases.

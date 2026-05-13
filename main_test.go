@@ -132,6 +132,115 @@ func TestFillEmptyOutboundTags(t *testing.T) {
 	}
 }
 
+func TestNormalizeVLESSUserEncryptionDefaultsMissingValue(t *testing.T) {
+	input := json.RawMessage(`{
+		"outbounds": [
+			{
+				"protocol": "vless",
+				"settings": {
+					"vnext": [
+						{
+							"address": "example.com",
+							"port": 443,
+							"users": [
+								{"id": "00000000-0000-0000-0000-000000000000"}
+							]
+						}
+					]
+				}
+			}
+		]
+	}`)
+
+	output, count, err := normalizeVLESSUserEncryption(input)
+	if err != nil {
+		t.Fatalf("normalizeVLESSUserEncryption returned error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 normalized user, got %d", count)
+	}
+
+	var parsed struct {
+		Outbounds []struct {
+			Settings struct {
+				VNext []struct {
+					Users []struct {
+						ID         string `json:"id"`
+						Encryption string `json:"encryption"`
+					} `json:"users"`
+				} `json:"vnext"`
+			} `json:"settings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+	user := parsed.Outbounds[0].Settings.VNext[0].Users[0]
+	if user.ID != "00000000-0000-0000-0000-000000000000" || user.Encryption != "none" {
+		t.Fatalf("unexpected VLESS user: %#v", user)
+	}
+}
+
+func TestNormalizeVLESSUserEncryptionPreservesExplicitValue(t *testing.T) {
+	input := json.RawMessage(`{
+		"outbounds": [
+			{
+				"protocol": "vless",
+				"settings": {
+					"vnext": [
+						{"users": [{"id": "id", "encryption": "mlkem768x25519plus"}]}
+					]
+				}
+			}
+		]
+	}`)
+
+	output, count, err := normalizeVLESSUserEncryption(input)
+	if err != nil {
+		t.Fatalf("normalizeVLESSUserEncryption returned error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no normalized users, got %d", count)
+	}
+	if string(output) != string(input) {
+		t.Fatalf("expected explicit encryption output to be unchanged\nwant %s\ngot  %s", input, output)
+	}
+}
+
+func TestNormalizeVLESSUserEncryptionDoesNotTouchOtherProtocols(t *testing.T) {
+	input := json.RawMessage(`{
+		"outbounds": [
+			{
+				"protocol": "trojan",
+				"settings": {
+					"vnext": [
+						{"users": [{"id": "id"}]}
+					]
+				}
+			},
+			{
+				"protocol": "vmess",
+				"settings": {
+					"vnext": [
+						{"users": [{"id": "id"}]}
+					]
+				}
+			}
+		]
+	}`)
+
+	output, count, err := normalizeVLESSUserEncryption(input)
+	if err != nil {
+		t.Fatalf("normalizeVLESSUserEncryption returned error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no normalized users, got %d", count)
+	}
+	if string(output) != string(input) {
+		t.Fatalf("expected non-VLESS output to be unchanged\nwant %s\ngot  %s", input, output)
+	}
+}
+
 func TestConvertBareProxyShareLinkToXrayJSONSocks(t *testing.T) {
 	data, ok, err := convertBareProxyShareLinkToXrayJSON("socks5://127.0.0.1:10050")
 	if err != nil {

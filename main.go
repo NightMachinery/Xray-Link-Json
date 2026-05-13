@@ -354,6 +354,10 @@ func convertShareLinkToXrayJSON(shareLink string) error {
 	if filledTags > 0 {
 		stderrln("Filled empty outbound tags:", filledTags)
 	}
+	data, _, err = normalizeVLESSUserEncryption(data)
+	if err != nil {
+		return err
+	}
 
 	return writeDataToStdout(data)
 }
@@ -687,6 +691,77 @@ func fillEmptyOutboundTags(data json.RawMessage, tagGenerator func() (string, er
 	}
 
 	return encoded, filled, nil
+}
+
+func normalizeVLESSUserEncryption(data json.RawMessage) (json.RawMessage, int, error) {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, 0, fmt.Errorf("failed to parse JSON output for VLESS encryption normalization: %w", err)
+	}
+
+	rawOutbounds, ok := root["outbounds"]
+	if !ok || rawOutbounds == nil {
+		return data, 0, nil
+	}
+
+	outbounds, ok := rawOutbounds.([]any)
+	if !ok {
+		return nil, 0, fmt.Errorf("outbounds is not a JSON array")
+	}
+
+	normalized := 0
+	for outboundIndex, rawOutbound := range outbounds {
+		outbound, ok := rawOutbound.(map[string]any)
+		if !ok {
+			return nil, 0, fmt.Errorf("outbound %d is not a JSON object", outboundIndex)
+		}
+		protocol, _ := outbound["protocol"].(string)
+		if !strings.EqualFold(protocol, "vless") {
+			continue
+		}
+
+		settings, ok := outbound["settings"].(map[string]any)
+		if !ok || settings == nil {
+			continue
+		}
+		vnext, ok := settings["vnext"].([]any)
+		if !ok {
+			continue
+		}
+
+		for vnextIndex, rawServer := range vnext {
+			server, ok := rawServer.(map[string]any)
+			if !ok {
+				return nil, 0, fmt.Errorf("vless outbound %d vnext %d is not a JSON object", outboundIndex, vnextIndex)
+			}
+			users, ok := server["users"].([]any)
+			if !ok {
+				continue
+			}
+			for userIndex, rawUser := range users {
+				user, ok := rawUser.(map[string]any)
+				if !ok {
+					return nil, 0, fmt.Errorf("vless outbound %d vnext %d user %d is not a JSON object", outboundIndex, vnextIndex, userIndex)
+				}
+				if _, exists := user["encryption"]; exists {
+					continue
+				}
+				user["encryption"] = "none"
+				normalized++
+			}
+		}
+	}
+
+	if normalized == 0 {
+		return data, 0, nil
+	}
+
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to encode JSON output after VLESS encryption normalization: %w", err)
+	}
+
+	return encoded, normalized, nil
 }
 
 func randomTwoWordTag() (string, error) {

@@ -114,6 +114,51 @@ func TestFillEmptyOutboundTags(t *testing.T) {
 	}
 }
 
+func TestStripJSONNullFieldsRecursivelyRemovesObjectNulls(t *testing.T) {
+	input := json.RawMessage(`{
+		"keep": false,
+		"zero": 0,
+		"empty": "",
+		"drop": null,
+		"nested": {
+			"drop": null,
+			"keep": "value"
+		},
+		"array": [
+			{"drop": null, "keep": "value"},
+			null
+		]
+	}`)
+
+	output, err := stripJSONNullFields(input)
+	if err != nil {
+		t.Fatalf("stripJSONNullFields returned error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal cleaned output: %v", err)
+	}
+	if _, exists := parsed["drop"]; exists {
+		t.Fatalf("expected top-level null field to be removed: %#v", parsed)
+	}
+	if parsed["keep"] != false || parsed["zero"] != float64(0) || parsed["empty"] != "" {
+		t.Fatalf("expected non-null falsy values to be preserved: %#v", parsed)
+	}
+	nested := jsonObject(t, parsed["nested"])
+	if _, exists := nested["drop"]; exists || nested["keep"] != "value" {
+		t.Fatalf("unexpected nested cleanup result: %#v", nested)
+	}
+	array, ok := parsed["array"].([]any)
+	if !ok || len(array) != 2 || array[1] != nil {
+		t.Fatalf("expected array shape and null entries to be preserved: %#v", parsed["array"])
+	}
+	arrayObject := jsonObject(t, array[0])
+	if _, exists := arrayObject["drop"]; exists || arrayObject["keep"] != "value" {
+		t.Fatalf("unexpected array object cleanup result: %#v", arrayObject)
+	}
+}
+
 func TestConvertShareLinkToXrayJSONDefaultsVLESSEncryption(t *testing.T) {
 	data, err := convertShareLinkToXrayJSONData("vless://" + testVLESSID + "@example.com:443?type=tcp")
 	if err != nil {
@@ -253,10 +298,16 @@ func TestConvertShareLinkToXrayJSONPreservesXHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convertShareLinkToXrayJSONData returned error: %v", err)
 	}
+	if strings.Contains(string(data), ":null") {
+		t.Fatalf("expected converted JSON to omit null fields, got %s", data)
+	}
 
 	streamSettings := jsonObject(t, firstOutbound(t, data)["streamSettings"])
 	if streamSettings["network"] != "xhttp" || streamSettings["security"] != "tls" {
 		t.Fatalf("unexpected stream settings: %#v", streamSettings)
+	}
+	if _, exists := streamSettings["grpcSettings"]; exists {
+		t.Fatalf("expected null grpcSettings to be omitted: %#v", streamSettings)
 	}
 	xhttpSettings := jsonObject(t, streamSettings["xhttpSettings"])
 	if xhttpSettings["path"] != "/xhttp-test" || xhttpSettings["host"] != "edge.example.com" || xhttpSettings["mode"] != "auto" {

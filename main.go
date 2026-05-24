@@ -365,7 +365,7 @@ func convertShareLinkToXrayJSONData(shareLink string) (json.RawMessage, error) {
 	if filledTags > 0 {
 		stderrln("Filled empty outbound tags:", filledTags)
 	}
-	return data, nil
+	return stripJSONNullFields(data)
 }
 
 func convertBareHTTPProxyURLToXrayJSON(shareLink string) (json.RawMessage, bool, error) {
@@ -690,6 +690,40 @@ func outboundHasName(outbound map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func stripJSONNullFields(data json.RawMessage) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON output for null cleanup: %w", err)
+	}
+	cleaned := stripNullFields(value)
+	encoded, err := json.Marshal(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode JSON output after null cleanup: %w", err)
+	}
+	return encoded, nil
+}
+
+func stripNullFields(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if child == nil {
+				delete(typed, key)
+				continue
+			}
+			typed[key] = stripNullFields(child)
+		}
+		return typed
+	case []any:
+		for i, child := range typed {
+			typed[i] = stripNullFields(child)
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 func randomTwoWordTag() (string, error) {

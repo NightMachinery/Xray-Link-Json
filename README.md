@@ -3,7 +3,7 @@
 CLI wrapper around `github.com/xtls/libxray` that converts between:
 - Xray JSON config
 - share links (`vless://`, `vmess://`, etc.)
-- bare proxy URLs (`socks5://host:port`, `http://user:pass@host:port`)
+- bare proxy URLs (`socks5://host:port`, `socks5h://host:port`, `http://user:pass@host:port`)
 
 ## Install
 
@@ -58,6 +58,7 @@ Convert a bare SOCKS or HTTP proxy URL -> JSON:
 
 ```bash
 Xray-Link-Json 'socks5://127.0.0.1:10050'
+Xray-Link-Json 'socks5h://proxyuser:password@example.com:1080#proxy'
 Xray-Link-Json 'http://proxyuser:password@example.com:2060'
 ```
 
@@ -80,6 +81,7 @@ jq -c . ./client.json | Xray-Link-Json -
 ```
 
 Diagnostics and Xray warnings are written to stderr so stdout contains only the converted data.
+Modern transport parameters such as XHTTP `path`, `host`, and `mode` are preserved when supported by libxray.
 
 When converting share links to JSON, empty outbound `tag` fields are filled with random hyphenated two-word tags from the system dictionary.
 VLESS users are emitted with `"encryption":"none"` when the share link omits an encryption value, matching current Xray config requirements.

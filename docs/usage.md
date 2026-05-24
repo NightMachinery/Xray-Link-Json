@@ -17,11 +17,20 @@ Bare proxy URLs are accepted directly:
 ```bash
 Xray-Link-Json 'socks5://127.0.0.1:10050'
 Xray-Link-Json 'socks5://user:pass@example.com:1080#proxy-tag'
+Xray-Link-Json 'socks5h://user:pass@example.com:1080#proxy-tag'
 Xray-Link-Json 'http://proxyuser:password@example.com:2060'
 ```
 
+`socks5://` and `socks5h://` inputs are normalized to libxray's canonical
+`socks://` share-link form before conversion. `mixed://` is rejected because
+Xray's `mixed` protocol is inbound-only.
+
 For `http://` inputs, only bare proxy URLs with no path or query string are
 handled as proxy settings. Other HTTP URLs are left for the upstream converter.
+
+Transport-specific share-link parameters are preserved when libxray supports
+them, including XHTTP and SplitHTTP `path`, `host`, and `mode` values and
+HTTPUpgrade `path` and `host` values.
 
 ## Release artifacts
 
@@ -78,6 +87,5 @@ When share links are converted to Xray JSON, any outbound with an empty `"tag": 
 ## VLESS encryption
 
 When VLESS share links are converted to Xray JSON, users include an
-`"encryption"` field. If the share link or upstream conversion output omits the
-value, `Xray-Link-Json` defaults it to `"none"` so the generated config is
-accepted by current Xray releases.
+`"encryption"` field. If the share link omits the value, libxray defaults it to
+`"none"` so the generated config is accepted by current Xray releases.

@@ -629,7 +629,138 @@ func convertXrayJSONToShareLinks(xrayJSON string) error {
 }
 
 func convertXrayJSONToShareText(xrayJSON string) (string, error) {
-	return share.ConvertXrayJsonToShareLinks([]byte(xrayJSON))
+	normalizedJSON, err := normalizeXrayJSONForShareLinks(xrayJSON)
+	if err != nil {
+		return "", err
+	}
+	return share.ConvertXrayJsonToShareLinks([]byte(normalizedJSON))
+}
+
+func normalizeXrayJSONForShareLinks(xrayJSON string) (string, error) {
+	var root any
+	if err := json.Unmarshal([]byte(xrayJSON), &root); err != nil {
+		return "", fmt.Errorf("failed to parse Xray JSON for share-link normalization: %w", err)
+	}
+
+	rootObject, ok := root.(map[string]any)
+	if !ok {
+		return xrayJSON, nil
+	}
+	rawOutbounds, ok := rootObject["outbounds"].([]any)
+	if !ok {
+		return xrayJSON, nil
+	}
+
+	for _, rawOutbound := range rawOutbounds {
+		outbound, ok := rawOutbound.(map[string]any)
+		if !ok {
+			continue
+		}
+		settings, ok := outbound["settings"].(map[string]any)
+		if !ok {
+			continue
+		}
+		protocol, _ := outbound["protocol"].(string)
+		normalizeOutboundSettingsForShareLink(protocol, settings)
+	}
+
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode Xray JSON after share-link normalization: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func normalizeOutboundSettingsForShareLink(protocol string, settings map[string]any) {
+	switch strings.ToLower(protocol) {
+	case "vless", "vmess":
+		normalizeVNextSettingsForShareLink(protocol, settings)
+	case "trojan", "shadowsocks", "socks", "http":
+		normalizeServerSettingsForShareLink(protocol, settings)
+	}
+}
+
+func normalizeVNextSettingsForShareLink(protocol string, settings map[string]any) {
+	if settings["address"] != nil && settings["port"] != nil {
+		return
+	}
+	server := firstObjectFromArray(settings["vnext"])
+	if server == nil {
+		return
+	}
+	copySettingIfMissing(settings, server, "address")
+	copySettingIfMissing(settings, server, "port")
+
+	user := firstObjectFromArray(server["users"])
+	if user == nil {
+		return
+	}
+	copySettingIfMissing(settings, user, "id")
+	copySettingIfMissing(settings, user, "level")
+	copySettingIfMissing(settings, user, "email")
+	switch strings.ToLower(protocol) {
+	case "vless":
+		copySettingIfMissing(settings, user, "flow")
+		copySettingIfMissing(settings, user, "encryption")
+	case "vmess":
+		if settings["security"] == nil {
+			if security, ok := user["security"]; ok {
+				settings["security"] = security
+			} else if security, ok := user["encryption"]; ok {
+				settings["security"] = security
+			}
+		}
+	}
+}
+
+func normalizeServerSettingsForShareLink(protocol string, settings map[string]any) {
+	if settings["address"] != nil && settings["port"] != nil {
+		return
+	}
+	server := firstObjectFromArray(settings["servers"])
+	if server == nil {
+		return
+	}
+	copySettingIfMissing(settings, server, "address")
+	copySettingIfMissing(settings, server, "port")
+	copySettingIfMissing(settings, server, "level")
+	copySettingIfMissing(settings, server, "email")
+
+	switch strings.ToLower(protocol) {
+	case "trojan":
+		copySettingIfMissing(settings, server, "password")
+		copySettingIfMissing(settings, server, "flow")
+	case "shadowsocks":
+		copySettingIfMissing(settings, server, "method")
+		copySettingIfMissing(settings, server, "password")
+	case "socks", "http":
+		user := firstObjectFromArray(server["users"])
+		if user != nil {
+			copySettingIfMissing(settings, user, "user")
+			copySettingIfMissing(settings, user, "pass")
+		}
+	}
+}
+
+func firstObjectFromArray(value any) map[string]any {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	object, ok := items[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return object
+}
+
+func copySettingIfMissing(target, source map[string]any, key string) {
+	if target[key] != nil {
+		return
+	}
+	if value, ok := source[key]; ok && value != nil {
+		target[key] = value
+	}
 }
 
 func fillEmptyOutboundTags(data json.RawMessage, tagGenerator func() (string, error)) (json.RawMessage, int, error) {

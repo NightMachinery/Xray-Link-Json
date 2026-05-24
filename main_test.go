@@ -330,10 +330,18 @@ func TestConvertXrayJSONToShareTextPreservesXHTTP(t *testing.T) {
 				"protocol": "vless",
 				"tag": "xhttp-test",
 				"settings": {
-					"address": "203.0.113.10",
-					"port": 443,
-					"id": "` + testVLESSID + `",
-					"encryption": "none"
+					"vnext": [
+						{
+							"address": "203.0.113.10",
+							"port": 443,
+							"users": [
+								{
+									"id": "` + testVLESSID + `",
+									"encryption": "none"
+								}
+							]
+						}
+					]
 				},
 				"streamSettings": {
 					"network": "xhttp",

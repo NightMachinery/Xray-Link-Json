@@ -1,13 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 )
+
+const testVLESSID = "00000000-0000-0000-0000-000000000000"
 
 func TestParseArgsRequiresOneInput(t *testing.T) {
 	opts, err := parseArgs([]string{"-"})
@@ -70,33 +71,11 @@ func TestDecodeXrayVersion(t *testing.T) {
 	}
 }
 
-func TestCallLibXrayWithStdoutRedirectMovesStdoutToStderr(t *testing.T) {
-	var stderr bytes.Buffer
-	previousStderr := stderrOut
-	stderrOut = &stderr
-	defer func() {
-		stderrOut = previousStderr
-	}()
-
-	result, err := callLibXrayWithStdoutRedirect(func() string {
-		fmt.Print("converter warning\n")
-		return "encoded-result"
-	})
-	if err != nil {
-		t.Fatalf("callLibXrayWithStdoutRedirect returned error: %v", err)
-	}
-	if result != "encoded-result" {
-		t.Fatalf("expected encoded result, got %q", result)
-	}
-	if !strings.Contains(stderr.String(), "converter warning") {
-		t.Fatalf("expected captured stdout to be written to stderr, got %q", stderr.String())
-	}
-}
-
 func TestFillEmptyOutboundTags(t *testing.T) {
 	input := json.RawMessage(`{
 		"outbounds": [
 			{"protocol": "vless", "tag": ""},
+			{"protocol": "vless", "tag": "", "sendThrough": "named-outbound"},
 			{"protocol": "trojan", "tag": "keep-me"},
 			{"protocol": "vmess"}
 		]
@@ -124,209 +103,67 @@ func TestFillEmptyOutboundTags(t *testing.T) {
 	if parsed.Outbounds[0].Tag != "alpha-bravo" {
 		t.Fatalf("expected first tag to be filled, got %q", parsed.Outbounds[0].Tag)
 	}
-	if parsed.Outbounds[1].Tag != "keep-me" {
-		t.Fatalf("expected non-empty tag to be preserved, got %q", parsed.Outbounds[1].Tag)
+	if parsed.Outbounds[1].Tag != "" {
+		t.Fatalf("expected named outbound tag to remain empty, got %q", parsed.Outbounds[1].Tag)
 	}
-	if parsed.Outbounds[2].Tag != "" {
-		t.Fatalf("expected missing tag to remain absent/empty, got %q", parsed.Outbounds[2].Tag)
+	if parsed.Outbounds[2].Tag != "keep-me" {
+		t.Fatalf("expected non-empty tag to be preserved, got %q", parsed.Outbounds[2].Tag)
+	}
+	if parsed.Outbounds[3].Tag != "" {
+		t.Fatalf("expected missing tag to remain absent/empty, got %q", parsed.Outbounds[3].Tag)
 	}
 }
 
-func TestNormalizeVLESSUserEncryptionDefaultsMissingValue(t *testing.T) {
-	input := json.RawMessage(`{
-		"outbounds": [
-			{
-				"protocol": "vless",
-				"settings": {
-					"vnext": [
-						{
-							"address": "example.com",
-							"port": 443,
-							"users": [
-								{"id": "00000000-0000-0000-0000-000000000000"}
-							]
-						}
-					]
-				}
-			}
-		]
-	}`)
-
-	output, count, err := normalizeVLESSUserEncryption(input)
+func TestConvertShareLinkToXrayJSONDefaultsVLESSEncryption(t *testing.T) {
+	data, err := convertShareLinkToXrayJSONData("vless://" + testVLESSID + "@example.com:443?type=tcp")
 	if err != nil {
-		t.Fatalf("normalizeVLESSUserEncryption returned error: %v", err)
+		t.Fatalf("convertShareLinkToXrayJSONData returned error: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 normalized user, got %d", count)
-	}
-
-	var parsed struct {
-		Outbounds []struct {
-			Settings struct {
-				VNext []struct {
-					Users []struct {
-						ID         string `json:"id"`
-						Encryption string `json:"encryption"`
-					} `json:"users"`
-				} `json:"vnext"`
-			} `json:"settings"`
-		} `json:"outbounds"`
-	}
-	if err := json.Unmarshal(output, &parsed); err != nil {
-		t.Fatalf("failed to unmarshal output: %v", err)
-	}
-	user := parsed.Outbounds[0].Settings.VNext[0].Users[0]
-	if user.ID != "00000000-0000-0000-0000-000000000000" || user.Encryption != "none" {
-		t.Fatalf("unexpected VLESS user: %#v", user)
+	outbound := firstOutbound(t, data)
+	settings := jsonObject(t, outbound["settings"])
+	if settings["encryption"] != "none" {
+		t.Fatalf("expected upstream VLESS encryption default none, got %#v", settings["encryption"])
 	}
 }
 
-func TestNormalizeVLESSUserEncryptionPreservesExplicitValue(t *testing.T) {
-	input := json.RawMessage(`{
-		"outbounds": [
-			{
-				"protocol": "vless",
-				"settings": {
-					"vnext": [
-						{"users": [{"id": "id", "encryption": "mlkem768x25519plus"}]}
-					]
-				}
-			}
-		]
-	}`)
-
-	output, count, err := normalizeVLESSUserEncryption(input)
+func TestConvertShareLinkToXrayJSONSocks(t *testing.T) {
+	user := base64.StdEncoding.EncodeToString([]byte("alice:secret"))
+	data, err := convertShareLinkToXrayJSONData("socks://" + user + "@127.0.0.1:10050#proxy")
 	if err != nil {
-		t.Fatalf("normalizeVLESSUserEncryption returned error: %v", err)
+		t.Fatalf("convertShareLinkToXrayJSONData returned error: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("expected no normalized users, got %d", count)
+	outbound := firstOutbound(t, data)
+	settings := jsonObject(t, outbound["settings"])
+	if outbound["protocol"] != "socks" || settings["address"] != "127.0.0.1" || settings["port"] != float64(10050) {
+		t.Fatalf("unexpected socks outbound: %#v", outbound)
 	}
-	if string(output) != string(input) {
-		t.Fatalf("expected explicit encryption output to be unchanged\nwant %s\ngot  %s", input, output)
-	}
-}
-
-func TestNormalizeVLESSUserEncryptionDoesNotTouchOtherProtocols(t *testing.T) {
-	input := json.RawMessage(`{
-		"outbounds": [
-			{
-				"protocol": "trojan",
-				"settings": {
-					"vnext": [
-						{"users": [{"id": "id"}]}
-					]
-				}
-			},
-			{
-				"protocol": "vmess",
-				"settings": {
-					"vnext": [
-						{"users": [{"id": "id"}]}
-					]
-				}
-			}
-		]
-	}`)
-
-	output, count, err := normalizeVLESSUserEncryption(input)
-	if err != nil {
-		t.Fatalf("normalizeVLESSUserEncryption returned error: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("expected no normalized users, got %d", count)
-	}
-	if string(output) != string(input) {
-		t.Fatalf("expected non-VLESS output to be unchanged\nwant %s\ngot  %s", input, output)
+	if settings["user"] != "alice" || settings["pass"] != "secret" {
+		t.Fatalf("unexpected socks auth settings: %#v", settings)
 	}
 }
 
-func TestConvertBareProxyShareLinkToXrayJSONSocks(t *testing.T) {
-	data, ok, err := convertBareProxyShareLinkToXrayJSON("socks5://127.0.0.1:10050")
-	if err != nil {
-		t.Fatalf("convertBareProxyShareLinkToXrayJSON returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected socks5 link to be handled")
-	}
-
-	var parsed struct {
-		Outbounds []struct {
-			Protocol string `json:"protocol"`
-			Tag      string `json:"tag"`
-			Settings struct {
-				Servers []struct {
-					Address string `json:"address"`
-					Port    int    `json:"port"`
-				} `json:"servers"`
-			} `json:"settings"`
-		} `json:"outbounds"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("failed to unmarshal output: %v", err)
-	}
-	if len(parsed.Outbounds) != 1 {
-		t.Fatalf("expected 1 outbound, got %d", len(parsed.Outbounds))
-	}
-	outbound := parsed.Outbounds[0]
-	if outbound.Protocol != "socks" {
-		t.Fatalf("expected socks protocol, got %q", outbound.Protocol)
-	}
-	if outbound.Tag != "socks" {
-		t.Fatalf("expected default tag socks, got %q", outbound.Tag)
-	}
-	if len(outbound.Settings.Servers) != 1 {
-		t.Fatalf("expected 1 server, got %d", len(outbound.Settings.Servers))
-	}
-	server := outbound.Settings.Servers[0]
-	if server.Address != "127.0.0.1" || server.Port != 10050 {
-		t.Fatalf("unexpected server: %#v", server)
+func TestConvertShareLinkToXrayJSONNormalizesSocks5AndSocks5h(t *testing.T) {
+	for _, scheme := range []string{"socks5", "socks5h"} {
+		data, err := convertShareLinkToXrayJSONData(scheme + "://alice:secret@example.com:1080#proxy")
+		if err != nil {
+			t.Fatalf("convertShareLinkToXrayJSONData(%s) returned error: %v", scheme, err)
+		}
+		outbound := firstOutbound(t, data)
+		settings := jsonObject(t, outbound["settings"])
+		if outbound["protocol"] != "socks" || settings["address"] != "example.com" || settings["port"] != float64(1080) {
+			t.Fatalf("unexpected normalized %s outbound: %#v", scheme, outbound)
+		}
+		if settings["user"] != "alice" || settings["pass"] != "secret" {
+			t.Fatalf("unexpected normalized %s auth settings: %#v", scheme, settings)
+		}
 	}
 }
 
-func TestConvertBareProxyShareLinkToXrayJSONWithUserAndTag(t *testing.T) {
-	data, ok, err := convertBareProxyShareLinkToXrayJSON("socks5://alice:secret@example.com:1080#proxy")
-	if err != nil {
-		t.Fatalf("convertBareProxyShareLinkToXrayJSON returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected socks5 link to be handled")
-	}
-
-	var parsed struct {
-		Outbounds []struct {
-			Tag      string `json:"tag"`
-			Settings struct {
-				Servers []struct {
-					Users []struct {
-						User string `json:"user"`
-						Pass string `json:"pass"`
-					} `json:"users"`
-				} `json:"servers"`
-			} `json:"settings"`
-		} `json:"outbounds"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("failed to unmarshal output: %v", err)
-	}
-	outbound := parsed.Outbounds[0]
-	if outbound.Tag != "proxy" {
-		t.Fatalf("expected fragment tag proxy, got %q", outbound.Tag)
-	}
-	users := outbound.Settings.Servers[0].Users
-	if len(users) != 1 {
-		t.Fatalf("expected 1 user, got %d", len(users))
-	}
-	if users[0].User != "alice" || users[0].Pass != "secret" {
-		t.Fatalf("unexpected user: %#v", users[0])
-	}
-}
-
-func TestConvertBareProxyShareLinkToXrayJSONHTTP(t *testing.T) {
+func TestConvertBareHTTPProxyURLToXrayJSON(t *testing.T) {
 	password := "very-long-hyphenated-password-value"
-	data, ok, err := convertBareProxyShareLinkToXrayJSON("http://proxyuser:" + password + "@example.com:2060#web")
+	data, ok, err := convertBareHTTPProxyURLToXrayJSON("http://proxyuser:" + password + "@example.com:2060#web")
 	if err != nil {
-		t.Fatalf("convertBareProxyShareLinkToXrayJSON returned error: %v", err)
+		t.Fatalf("convertBareHTTPProxyURLToXrayJSON returned error: %v", err)
 	}
 	if !ok {
 		t.Fatal("expected bare http proxy link to be handled")
@@ -367,15 +204,21 @@ func TestConvertBareProxyShareLinkToXrayJSONHTTP(t *testing.T) {
 	}
 }
 
-func TestConvertBareProxyShareLinkToXrayJSONSkipsHTTPURLs(t *testing.T) {
-	if _, ok, err := convertBareProxyShareLinkToXrayJSON("http://example.com:8080/sub?token=abc"); ok || err != nil {
+func TestConvertBareHTTPProxyURLToXrayJSONSkipsHTTPURLs(t *testing.T) {
+	if _, ok, err := convertBareHTTPProxyURLToXrayJSON("http://example.com:8080/sub?token=abc"); ok || err != nil {
 		t.Fatalf("expected non-bare http URL to be skipped, ok=%v err=%v", ok, err)
 	}
 }
 
-func TestConvertBareProxyShareLinkToXrayJSONRejectsInvalidPort(t *testing.T) {
-	if _, ok, err := convertBareProxyShareLinkToXrayJSON("socks5://127.0.0.1:70000"); !ok || err == nil {
-		t.Fatalf("expected invalid socks5 port error, ok=%v err=%v", ok, err)
+func TestConvertShareLinkToXrayJSONRejectsInvalidSocks5Port(t *testing.T) {
+	if _, err := convertShareLinkToXrayJSONData("socks5://127.0.0.1:70000"); err == nil {
+		t.Fatal("expected invalid socks5 port error")
+	}
+}
+
+func TestConvertShareLinkToXrayJSONRejectsMixedProxyURL(t *testing.T) {
+	if _, err := convertShareLinkToXrayJSONData("mixed://127.0.0.1:1080"); err == nil {
+		t.Fatal("expected mixed proxy URL error")
 	}
 }
 
@@ -383,7 +226,11 @@ func TestNormalizeShareTextForLibXrayTrimsTrailingVMessQRCodeJunk(t *testing.T) 
 	payload := "eyJhZGQiOiI4NS4xOTQuMjQzLjExNyIsImFpZCI6IjAiLCJhbHBuIjoiIiwiZnAiOiIiLCJob3N0IjoiODUuMTk0LjI0My4xMTciLCJpZCI6IjE0MjNmYTU0LTEyNTYtNGNiYi05NjYzLWUwY2NhYjQ2ZjAyYSIsImluc2VjdXJlIjoiMCIsIm5ldCI6IndzIiwicGF0aCI6Ii92bWVzcy1hcmdvIiwicG9ydCI6IjU3ODc4IiwicHMiOiJJUi1AVjJyYXlBbHBoYS0yNyIsInNjeSI6ImF1dG8iLCJzbmkiOiIiLCJ0bHMiOiIiLCJ0eXBlIjoiLS0tIiwidiI6IjIifQ=="
 	input := "vmess://" + payload + "vmess"
 	want := "vmess://" + payload
-	if got := normalizeShareTextForLibXray(input); got != want {
+	got, err := normalizeShareTextForLibXray(input)
+	if err != nil {
+		t.Fatalf("normalizeShareTextForLibXray returned error: %v", err)
+	}
+	if got != want {
 		t.Fatalf("expected trailing VMess QR junk to be trimmed\nwant %q\ngot  %q", want, got)
 	}
 }
@@ -391,8 +238,113 @@ func TestNormalizeShareTextForLibXrayTrimsTrailingVMessQRCodeJunk(t *testing.T) 
 func TestNormalizeShareTextForLibXrayKeepsOnlyURILinesWhenPresent(t *testing.T) {
 	input := "# header\n\nnot a link\nhttps://example.com/page\nvmess://abc\nvless://id@example.com:443\nhttp://proxyuser:password@example.com:2060\n"
 	want := "vless://id@example.com:443\nhttp://proxyuser:password@example.com:2060"
-	if got := normalizeShareTextForLibXray(input); got != want {
+	got, err := normalizeShareTextForLibXray(input)
+	if err != nil {
+		t.Fatalf("normalizeShareTextForLibXray returned error: %v", err)
+	}
+	if got != want {
 		t.Fatalf("expected subscription comments and prose to be filtered\nwant %q\ngot  %q", want, got)
+	}
+}
+
+func TestConvertShareLinkToXrayJSONPreservesXHTTP(t *testing.T) {
+	link := "vless://" + testVLESSID + "@203.0.113.10:443?type=xhttp&encryption=none&path=%2Fxhttp-test&host=edge.example.com&mode=auto&security=tls&alpn=h2%2Chttp%2F1.1&sni=edge.example.com#xhttp-test"
+	data, err := convertShareLinkToXrayJSONData(link)
+	if err != nil {
+		t.Fatalf("convertShareLinkToXrayJSONData returned error: %v", err)
+	}
+
+	streamSettings := jsonObject(t, firstOutbound(t, data)["streamSettings"])
+	if streamSettings["network"] != "xhttp" || streamSettings["security"] != "tls" {
+		t.Fatalf("unexpected stream settings: %#v", streamSettings)
+	}
+	xhttpSettings := jsonObject(t, streamSettings["xhttpSettings"])
+	if xhttpSettings["path"] != "/xhttp-test" || xhttpSettings["host"] != "edge.example.com" || xhttpSettings["mode"] != "auto" {
+		t.Fatalf("unexpected xhttp settings: %#v", xhttpSettings)
+	}
+	tlsSettings := jsonObject(t, streamSettings["tlsSettings"])
+	if tlsSettings["serverName"] != "edge.example.com" {
+		t.Fatalf("unexpected TLS settings: %#v", tlsSettings)
+	}
+	alpn, ok := tlsSettings["alpn"].([]any)
+	if !ok || len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
+		t.Fatalf("unexpected ALPN settings: %#v", tlsSettings["alpn"])
+	}
+}
+
+func TestConvertXrayJSONToShareTextPreservesXHTTP(t *testing.T) {
+	linkText, err := convertXrayJSONToShareText(`{
+		"outbounds": [
+			{
+				"protocol": "vless",
+				"tag": "xhttp-test",
+				"settings": {
+					"address": "203.0.113.10",
+					"port": 443,
+					"id": "` + testVLESSID + `",
+					"encryption": "none"
+				},
+				"streamSettings": {
+					"network": "xhttp",
+					"security": "tls",
+					"tlsSettings": {
+						"serverName": "edge.example.com",
+						"alpn": ["h2", "http/1.1"]
+					},
+					"xhttpSettings": {
+						"path": "/xhttp-test",
+						"host": "edge.example.com",
+						"mode": "auto"
+					}
+				}
+			}
+		]
+	}`)
+	if err != nil {
+		t.Fatalf("convertXrayJSONToShareText returned error: %v", err)
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(linkText))
+	if err != nil {
+		t.Fatalf("failed to parse generated link: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme != "vless" || query.Get("type") != "xhttp" || query.Get("path") != "/xhttp-test" || query.Get("host") != "edge.example.com" || query.Get("mode") != "auto" {
+		t.Fatalf("generated link lost XHTTP values: %s", linkText)
+	}
+	if query.Get("security") != "tls" || query.Get("sni") != "edge.example.com" || query.Get("alpn") != "h2,http/1.1" {
+		t.Fatalf("generated link lost TLS values: %s", linkText)
+	}
+}
+
+func TestConvertShareLinkToXrayJSONPreservesHTTPUpgrade(t *testing.T) {
+	link := "vless://" + testVLESSID + "@203.0.113.11:443?type=httpupgrade&encryption=none&path=%2Fupgrade&host=upgrade.example.com"
+	data, err := convertShareLinkToXrayJSONData(link)
+	if err != nil {
+		t.Fatalf("convertShareLinkToXrayJSONData returned error: %v", err)
+	}
+
+	streamSettings := jsonObject(t, firstOutbound(t, data)["streamSettings"])
+	upgradeSettings := jsonObject(t, streamSettings["httpupgradeSettings"])
+	if upgradeSettings["path"] != "/upgrade" || upgradeSettings["host"] != "upgrade.example.com" {
+		t.Fatalf("unexpected httpupgrade settings: %#v", upgradeSettings)
+	}
+}
+
+func TestConvertShareLinkToXrayJSONPreservesSplitHTTP(t *testing.T) {
+	link := "vless://" + testVLESSID + "@203.0.113.12:443?type=splithttp&encryption=none&path=%2Fsplit&host=split.example.com&mode=stream-up"
+	data, err := convertShareLinkToXrayJSONData(link)
+	if err != nil {
+		t.Fatalf("convertShareLinkToXrayJSONData returned error: %v", err)
+	}
+
+	streamSettings := jsonObject(t, firstOutbound(t, data)["streamSettings"])
+	if streamSettings["network"] != "splithttp" {
+		t.Fatalf("unexpected stream settings: %#v", streamSettings)
+	}
+	xhttpSettings := jsonObject(t, streamSettings["xhttpSettings"])
+	if xhttpSettings["path"] != "/split" || xhttpSettings["host"] != "split.example.com" || xhttpSettings["mode"] != "stream-up" {
+		t.Fatalf("unexpected splithttp settings: %#v", xhttpSettings)
 	}
 }
 
@@ -405,4 +357,27 @@ func TestNormalizeTagWord(t *testing.T) {
 			t.Fatalf("expected %q to be rejected, got %q", raw, word)
 		}
 	}
+}
+
+func firstOutbound(t *testing.T, data json.RawMessage) map[string]any {
+	t.Helper()
+	var parsed struct {
+		Outbounds []map[string]any `json:"outbounds"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+	if len(parsed.Outbounds) != 1 {
+		t.Fatalf("expected 1 outbound, got %d", len(parsed.Outbounds))
+	}
+	return parsed.Outbounds[0]
+}
+
+func jsonObject(t *testing.T, value any) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("expected JSON object, got %#v", value)
+	}
+	return object
 }

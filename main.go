@@ -656,6 +656,7 @@ func normalizeXrayJSONForShareLinks(xrayJSON string) (string, error) {
 		if !ok {
 			continue
 		}
+		normalizeOutboundStreamSettingsForShareLink(outbound)
 		settings, ok := outbound["settings"].(map[string]any)
 		if !ok {
 			continue
@@ -669,6 +670,22 @@ func normalizeXrayJSONForShareLinks(xrayJSON string) (string, error) {
 		return "", fmt.Errorf("failed to encode Xray JSON after share-link normalization: %w", err)
 	}
 	return string(encoded), nil
+}
+
+func normalizeOutboundStreamSettingsForShareLink(outbound map[string]any) {
+	streamSettings, ok := outbound["streamSettings"].(map[string]any)
+	if !ok {
+		return
+	}
+	security, _ := streamSettings["security"].(string)
+	if !strings.EqualFold(security, "reality") {
+		return
+	}
+	realitySettings, ok := streamSettings["realitySettings"].(map[string]any)
+	if !ok {
+		return
+	}
+	copySettingIfMissingFromKey(realitySettings, realitySettings, "password", "publicKey")
 }
 
 func normalizeOutboundSettingsForShareLink(protocol string, settings map[string]any) {
@@ -755,11 +772,15 @@ func firstObjectFromArray(value any) map[string]any {
 }
 
 func copySettingIfMissing(target, source map[string]any, key string) {
-	if target[key] != nil {
+	copySettingIfMissingFromKey(target, source, key, key)
+}
+
+func copySettingIfMissingFromKey(target, source map[string]any, targetKey, sourceKey string) {
+	if target[targetKey] != nil {
 		return
 	}
-	if value, ok := source[key]; ok && value != nil {
-		target[key] = value
+	if value, ok := source[sourceKey]; ok && value != nil {
+		target[targetKey] = value
 	}
 }
 

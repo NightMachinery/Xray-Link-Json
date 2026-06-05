@@ -376,6 +376,59 @@ func TestConvertXrayJSONToShareTextPreservesXHTTP(t *testing.T) {
 	}
 }
 
+func TestConvertXrayJSONToShareTextPreservesRealityPublicKey(t *testing.T) {
+	const publicKey = "Uqkq8-sdtWm07ERGxf2-vqDdNvki-_b7miAkK2xOGh8"
+	linkText, err := convertXrayJSONToShareText(`{
+		"outbounds": [
+			{
+				"protocol": "vless",
+				"tag": "reality-test",
+				"settings": {
+					"vnext": [
+						{
+							"address": "203.0.113.20",
+							"port": 8443,
+							"users": [
+								{
+									"id": "` + testVLESSID + `",
+									"encryption": "none",
+									"flow": "xtls-rprx-vision"
+								}
+							]
+						}
+					]
+				},
+				"streamSettings": {
+					"network": "tcp",
+					"security": "reality",
+					"realitySettings": {
+						"serverName": "snapp.ir",
+						"publicKey": "` + publicKey + `",
+						"shortId": "e0de3e56b31b9c6f",
+						"spiderX": "/",
+						"fingerprint": "chrome"
+					}
+				}
+			}
+		]
+	}`)
+	if err != nil {
+		t.Fatalf("convertXrayJSONToShareText returned error: %v", err)
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(linkText))
+	if err != nil {
+		t.Fatalf("failed to parse generated link: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme != "vless" || parsed.Fragment != "reality-test" || query.Get("type") != "tcp" {
+		t.Fatalf("generated link has unexpected shape: %s", linkText)
+	}
+	if query.Get("security") != "reality" || query.Get("pbk") != publicKey || query.Get("sni") != "snapp.ir" || query.Get("sid") != "e0de3e56b31b9c6f" || query.Get("spx") != "/" || query.Get("fp") != "chrome" {
+		t.Fatalf("generated link lost Reality values: %s", linkText)
+	}
+}
+
 func TestConvertShareLinkToXrayJSONPreservesHTTPUpgrade(t *testing.T) {
 	link := "vless://" + testVLESSID + "@203.0.113.11:443?type=httpupgrade&encryption=none&path=%2Fupgrade&host=upgrade.example.com"
 	data, err := convertShareLinkToXrayJSONData(link)

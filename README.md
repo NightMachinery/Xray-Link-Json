@@ -82,6 +82,7 @@ jq -c . ./client.json | Xray-Link-Json -
 
 Diagnostics and Xray warnings are written to stderr so stdout contains only the converted data.
 Modern transport parameters such as XHTTP `path`, `host`, and `mode` are preserved when supported by libxray.
+Reality JSON outbounds using canonical `realitySettings.publicKey` are emitted as share links with `pbk=...`.
 
 When converting share links to JSON, empty outbound `tag` fields are filled with random hyphenated two-word tags from the system dictionary.
 VLESS users are emitted with `"encryption":"none"` when the share link omits an encryption value, matching current Xray config requirements.

@@ -26,6 +26,7 @@ import (
 
 	"github.com/xtls/libxray"
 	"github.com/xtls/libxray/share"
+	xraylog "github.com/xtls/xray-core/common/log"
 )
 
 type conversionEnvelope struct {
@@ -93,10 +94,28 @@ func stderrln(a ...any) {
 	fmt.Fprintln(stderrOut, a...)
 }
 
+type xrayStderrLogWriter struct{}
+
+func (xrayStderrLogWriter) Write(s string) error {
+	stderrln(strings.TrimRight(s, "\r\n"))
+	return nil
+}
+
+func (xrayStderrLogWriter) Close() error {
+	return nil
+}
+
+func redirectXrayLoggerToStderr() {
+	xraylog.RegisterHandler(xraylog.NewLogger(func() xraylog.Writer {
+		return xrayStderrLogWriter{}
+	}))
+}
+
 func main() {
 	stderrOut = newGrayTTYWriter(os.Stderr)
 	log.SetOutput(stderrOut)
 	log.SetFlags(0)
+	redirectXrayLoggerToStderr()
 
 	if isVersionCommand(os.Args) {
 		fmt.Print(versionInfo())
